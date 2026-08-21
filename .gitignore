@@ -1,0 +1,22 @@
+# Build output (STM32CubeIDE)
+Debug/
+Release/
+build/
+
+# Object / intermediate files (in case built outside Debug/Release too)
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.map
+*.list
+*.bin
+*.hex
+
+# Eclipse/CDT workspace metadata not needed for other machines
+.metadata/
+
+# OS junk
+.DS_Store
+Thumbs.db
