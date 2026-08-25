@@ -8,6 +8,7 @@
 #include "usart6.h"
 #include "mpu6050.h"
 #include <math.h>
+#include <stdio.h>
 #include "robot_control.h"
 
 int main(void)
@@ -18,6 +19,8 @@ int main(void)
     motor_init();
     encoder_init();
     usart6_init();
+    usart6_rx_init();   // RX (PC7) - nhan lenh dieu khien tu ESP32; khong anh huong
+                         // gi neu TELEOP_MODE_ENABLE=0, chi lang nghe thu dong
 
     usart6_send_string("STM32:BOOT\r\n");
 
@@ -42,6 +45,87 @@ int main(void)
     odometry_reset();
     usart6_send_string("STM32:RUNNING\r\n");
 
+#if TELEOP_MODE_ENABLE
+    // === Dieu khien thoi gian thuc bang ban phim (ESP32 server -> ESP32 tren
+    // robot -> UART6 RX). Khong co dieu kien tu dung nao khac ngoai watchdog
+    // mat tin hieu - chay vo han cho toi khi nguoi dung tat nguon. ===
+    usart6_send_string("STM32:TELEOP_READY\r\n");
+
+    uint32_t last_cmd_tick   = HAL_GetTick();
+    uint32_t last_step_tp    = HAL_GetTick();
+    uint32_t last_dt_tick_tp = last_step_tp;
+    float vx_cmd = 0.0f, vy_cmd = 0.0f, wz_cmd_tp = 0.0f;
+    char line_buf[USART6_RX_LINE_MAXLEN];
+
+    while (1) {
+        // ---- 1. Doc lenh moi tu ESP32 (dong "V,<vx_mm>,<vy_mm>,<wz_mrad>") ----
+        if (usart6_rx_line_ready()) {
+            usart6_rx_get_line(line_buf, sizeof(line_buf));
+
+            int a, b, c;
+            if (line_buf[0] == 'V' && line_buf[1] == ',' &&
+                sscanf(line_buf + 2, "%d,%d,%d", &a, &b, &c) == 3) {
+
+                float vx = (float)a / 1000.0f;   // mm/s  -> m/s
+                float vy = (float)b / 1000.0f;   // mm/s  -> m/s
+                float wz = (float)c / 1000.0f;   // mrad/s -> rad/s
+
+                if (vx >  TELEOP_VX_MAX_MPS)  vx =  TELEOP_VX_MAX_MPS;
+                if (vx < -TELEOP_VX_MAX_MPS)  vx = -TELEOP_VX_MAX_MPS;
+                if (vy >  TELEOP_VY_MAX_MPS)  vy =  TELEOP_VY_MAX_MPS;
+                if (vy < -TELEOP_VY_MAX_MPS)  vy = -TELEOP_VY_MAX_MPS;
+                if (wz >  TELEOP_WZ_MAX_RADS) wz =  TELEOP_WZ_MAX_RADS;
+                if (wz < -TELEOP_WZ_MAX_RADS) wz = -TELEOP_WZ_MAX_RADS;
+
+                vx_cmd    = vx;
+                vy_cmd    = vy;
+                wz_cmd_tp = wz;
+                last_cmd_tick = HAL_GetTick();
+            }
+            // dong khong parse duoc -> bo qua, GIU NGUYEN lenh cu (watchdog o
+            // duoi se tu ep ve 0 neu THUC SU mat tin hieu qua lau, khong phai
+            // vi loi rac 1 dong don le)
+        }
+
+        // ---- 2. Watchdog: mat tin hieu qua TELEOP_CMD_TIMEOUT_MS -> ep dung ----
+        // Day la lop an toan thu 3 (sau ESP32 server va ESP32 tren robot).
+        if (HAL_GetTick() - last_cmd_tick > TELEOP_CMD_TIMEOUT_MS) {
+            vx_cmd    = 0.0f;
+            vy_cmd    = 0.0f;
+            wz_cmd_tp = 0.0f;
+        }
+
+        // ---- 3. Vong dieu khien 50Hz (giu nhip giong cac kich ban test) ----
+        if (HAL_GetTick() - last_step_tp >= CONTROL_DT_MS) {
+            last_step_tp += CONTROL_DT_MS;
+
+            uint32_t now_tick_tp = HAL_GetTick();
+            float dt_s = (now_tick_tp - last_dt_tick_tp) / 1000.0f;
+            last_dt_tick_tp = now_tick_tp;
+
+            int32_t dcnt[4];
+            encoder_get_deltas(dcnt);
+
+            if (imu_ready) {
+                mpu6050_update(dt_s);
+            }
+            odometry_update(dcnt, dt_s);
+
+            // Dieu khien TRUC TIEP: wz tu ban phim di thang vao IK, khong tu
+            // dong giu huong - nguoi lai tu quan sat quy dao bang mat va tu
+            // chinh bang Q/E khi can (theo yeu cau, bo lai P-controller giu
+            // huong tung them truoc do).
+            robot_set_velocity(vx_cmd, vy_cmd, wz_cmd_tp);
+
+            usart6_send_string("POSE,");
+            usart6_send_float(odometry_get_x(), 3);          usart6_send_char(',');
+            usart6_send_float(odometry_get_y(), 3);          usart6_send_char(',');
+            usart6_send_float(odometry_get_theta_deg(), 2);
+            usart6_send_string("\r\n");
+        }
+    }
+    // khong bao gio toi day - teleop chay vo han, chi dung bang mat tin hieu
+#else
     uint32_t last_step   = HAL_GetTick();
     uint32_t last_dt_tick = last_step;
     uint32_t start_tick  = last_step;   // moc thoi gian t=0 cho quy dao cung tron (e)
@@ -178,6 +262,7 @@ int main(void)
 
     usart6_send_string("STM32:DONE\r\n");
     while (1) { }
+#endif
 }
 
 void Error_Handler(void)

@@ -8,7 +8,7 @@ Firmware điều khiển robot 4 bánh mecanum, chạy trên board Nucleo-F401RE
 - 4 động cơ DC + driver kiểu TB6612FNG (mỗi bánh 2 chân DIR + 1 chân STBY chung)
 - 4 encoder trục bánh (đọc bằng Timer Encoder Mode phần cứng, không cần ngắt)
 - IMU MPU6050 (I2C1) — dùng gyro trục Z để đo góc quay thân xe (yaw)
-- UART6 (115200 baud, TX only) — xuất telemetry ra máy tính để log/vẽ đồ thị
+- UART6 (115200 baud, TX + RX): TX xuất telemetry ra máy tính để log/vẽ đồ thị; RX (chân PC7) nhận lệnh điều khiển thời gian thực từ một ESP32 gắn ngoài (xem [Điều khiển thời gian thực](#điều-khiển-thời-gian-thực-teleop))
 
 ## Cấu trúc thư mục
 
@@ -33,9 +33,9 @@ Mỗi khối chức năng là một cặp `.h/.c` độc lập trong `Core/Inc` 
 | `kinematics.h/c` | Động học thuận (FK) & nghịch (IK) cho mecanum 4 bánh |
 | `mpu6050.h/c` | Driver I2C1 mức thanh ghi cho MPU6050, hiệu chuẩn bias + tích phân gyro Z ra góc yaw |
 | `odometry.h/c` | Ước lượng vị trí (x, y): FK từ encoder cho vận tốc, góc θ lấy trực tiếp từ IMU |
-| `usart6.h/c` | Gửi telemetry qua UART6 (115200 baud), có hàm gửi số nguyên/số thực tự viết |
+| `usart6.h/c` | TX: gửi telemetry qua UART6 (115200 baud), có hàm gửi số nguyên/số thực tự viết. RX: nhận lệnh điều khiển theo dòng qua ngắt (PC7), không chặn main loop |
 | `robot_control.h/c` | API cấp cao duy nhất: `robot_set_velocity(vx, vy, wz)` → tự IK + xuất PWM 4 bánh |
-| `main.c` | Kịch bản test: boot → hiệu chuẩn IMU → chạy theo quỹ đạo đặt sẵn → log telemetry → tự dừng |
+| `main.c` | Boot → hiệu chuẩn IMU → chạy 1 trong 2 chế độ: teleop thời gian thực (`TELEOP_MODE_ENABLE`) hoặc kịch bản test tự động → log telemetry |
 
 **Điểm thiết kế quan trọng:** toàn bộ driver ngoại vi (GPIO, Timer PWM, Timer Encoder, I2C, USART) được viết trực tiếp ở mức thanh ghi (`RCC->…`, `GPIOx->…`, `TIMx->…`, `I2Cx->…`) để kiểm soát chặt timing, chỉ dùng HAL cho `HAL_Init()`/`HAL_GetTick()`/`HAL_Delay()`/SysTick. Vì vậy file `.ioc` hiện **không** phản ánh đầy đủ cấu hình phần cứng thực tế — cần cẩn thận nếu mở lại CubeMX và generate code, tránh bị ghi đè phần cấu hình thủ công.
 
@@ -62,10 +62,23 @@ Với `R = WHEEL_R` (bán kính bánh) và `K = K_GEOM` (nửa dài + nửa rộ
 
 **Odometry (fusion encoder + IMU):** vận tốc thân xe lấy từ FK trên encoder, còn góc hướng θ lấy trực tiếp từ IMU (không tích phân lại lần hai) — khai thác đúng thế mạnh từng cảm biến: encoder cho quãng đường, IMU cho góc quay (ít trôi hơn khi bánh trượt).
 
-## Kịch bản test hiện tại (`main.c`)
+## Điều khiển thời gian thực (teleop)
 
-`main.c` hiện chạy bài test **hình vuông** (`TEST_SQUARE_ENABLE` trong `config.h`): robot đi liên tiếp 4 cạnh hình vuông cạnh `SQUARE_SIDE_M`, **giữ nguyên hướng thân xe** suốt quá trình, chỉ đổi vector vận tốc tịnh tiến ở mỗi góc — khai thác đúng khả năng holonomic của mecanum (bánh vi sai/Ackermann không làm được điều này). Ngoài ra còn 2 bài test khác chọn bằng compile switch trong `config.h`:
+Khi `TELEOP_MODE_ENABLE = 1` trong `config.h` (đang **bật**), `main.c` bỏ qua toàn bộ các kịch bản test tự động bên dưới và chuyển sang vòng lặp điều khiển trực tiếp bằng bàn phím, đi qua chuỗi: **bàn phím → server ESP32 → ESP32 gắn trên robot → UART6 RX (PC7) → STM32**.
 
+- **Giao thức dòng lệnh:** mỗi dòng dạng `V,<vx_mm>,<vy_mm>,<wz_mrad>` (đơn vị mm/s và mrad/s, số nguyên) — nhận qua ngắt UART6 RXNE, gom từng byte tới khi gặp `\n`/`\r` thì báo có dòng mới cho main loop, không polling/không chặn vòng lặp 50 Hz.
+- **Giới hạn an toàn phía STM32** (lớp cuối cùng, sau 2 lớp watchdog đã có ở ESP32 server và ESP32 trên robot): mỗi lệnh bị clamp về `±TELEOP_VX_MAX_MPS`, `±TELEOP_VY_MAX_MPS`, `±TELEOP_WZ_MAX_RADS`.
+- **Watchdog mất tín hiệu:** nếu quá `TELEOP_CMD_TIMEOUT_MS` (mặc định 500 ms) không nhận được dòng lệnh hợp lệ nào, vận tốc tự ép về 0 (dừng động cơ).
+- Trong chế độ này, `wz` đi thẳng vào IK theo lệnh người lái — **không** còn vòng P-controller tự giữ hướng (khác với các kịch bản test tự động ở dưới); người lái tự quan sát và chỉnh hướng qua lệnh `wz`.
+- Vẫn gửi telemetry `POSE,x,y,theta` qua UART6 TX mỗi 20 ms để log/giám sát song song.
+
+> Code phần ESP32 (server nhận bàn phím + ESP32 relay gắn trên robot) không nằm trong repo này.
+
+## Kịch bản test tự động (`main.c`, khi `TELEOP_MODE_ENABLE = 0`)
+
+Tắt teleop thì `main.c` chạy 1 trong 3 kịch bản test chọn bằng compile switch trong `config.h`:
+
+- `TEST_SQUARE_ENABLE` — đi liên tiếp 4 cạnh hình vuông cạnh `SQUARE_SIDE_M`, **giữ nguyên hướng thân xe** suốt quá trình, chỉ đổi vector vận tốc tịnh tiến ở mỗi góc — khai thác đúng khả năng holonomic của mecanum (bánh vi sai/Ackermann không làm được điều này).
 - `TEST_ARC_ENABLE` — đi theo cung tròn bán kính `TEST_ARC_R1_M`, giữ nguyên hướng thân xe.
 - Mặc định (tắt cả hai switch trên) — chạy thẳng theo `TARGET_VX_WORLD`/`TARGET_VY_WORLD` tới khi đạt `TARGET_DIST_M`.
 
@@ -81,9 +94,9 @@ Trong lúc chạy, mỗi 20 ms (`CONTROL_DT_MS`) firmware gửi telemetry qua UA
 
 ## Trạng thái & hướng phát triển tiếp theo
 
-Đã xong: driver PWM/encoder/IMU/UART, động học IK/FK, odometry fusion, vòng hiệu chỉnh hướng bằng gyro, 3 kịch bản test (thẳng, cung tròn, hình vuông), hiệu chỉnh tĩnh hệ số feed-forward `K_FF` từ dữ liệu thực đo.
+Đã xong: driver PWM/encoder/IMU/UART, động học IK/FK, odometry fusion, vòng hiệu chỉnh hướng bằng gyro (dùng ở các kịch bản test tự động), 3 kịch bản test (thẳng, cung tròn, hình vuông), hiệu chỉnh tĩnh hệ số feed-forward `K_FF` từ dữ liệu thực đo, **điều khiển thời gian thực qua UART6 RX (teleop bàn phím qua ESP32)** kèm watchdog + clamp an toàn.
 
 Đang thiếu / dự kiến làm tiếp:
 - Vòng phản hồi tốc độ (PID) theo encoder cho từng bánh — hiện chỉ là feed-forward tuyến tính (`K_FF`), nhạy với tải/ma sát/mức pin.
-- Kênh nhận lệnh điều khiển từ ngoài (UART6 hiện chỉ có chiều gửi).
+- Vòng giữ hướng tự động chưa áp dụng cho chế độ teleop (đang điều khiển `wz` hoàn toàn thủ công).
 - Đồng bộ lại `FWMR_run_test.ioc` với cấu hình phần cứng thực tế đang chạy thủ công trong code.

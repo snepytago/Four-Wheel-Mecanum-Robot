@@ -46,4 +46,24 @@
 #define SQUARE_SPEED_MPS      0.4f    // m/s - toc do tren moi canh (vung da tung kiem chung on dinh
                                        // voi K_FF=66 cu; neu dang dung K_FF=29.3 moi ma van yeu/giat,
                                        // day cung la du lieu them de danh gia K_FF chu khong rieng test (e))
+
+// === Dieu khien thoi gian thuc bang ban phim, qua ESP32 server -> ESP32 tren
+// robot -> UART6 RX (PC7). Bat = 1: main.c BO QUA cac kich ban test tu dong
+// (TEST_ARC/TEST_SQUARE/... o tren) va chuyen sang doc lenh (vx,vy,wz) tu
+// UART6 RX de dieu khien truc tiep, khong tu dung. Chi bat 1 trong 2 (teleop
+// hoac test tu dong) cung 1 luc - giong cach TEST_ARC_ENABLE/TEST_SQUARE_ENABLE
+// dang duoc bat/tat bang tay o tren.
+#define TELEOP_MODE_ENABLE      1
+
+// Neu qua thoi gian nay (ms) khong nhan duoc dong lenh hop le moi nao qua
+// UART6 RX -> tu dong ep van toc ve 0 (dung dong co). Day la lop an toan
+// CUOI CUNG, sau 2 lop watchdog da co san o ESP32 server va ESP32 tren robot.
+#define TELEOP_CMD_TIMEOUT_MS   500u
+
+// Gioi han an toan cho lenh nhan tu UART6 RX - chan bot neu vi ly do nao do
+// co gia tri bat thuong lot qua cac lop kiem tra phia truoc (ESP32).
+#define TELEOP_VX_MAX_MPS       1.0f    // m/s
+#define TELEOP_VY_MAX_MPS       1.0f    // m/s
+#define TELEOP_WZ_MAX_RADS      2.0f    // rad/s
+
 #endif
