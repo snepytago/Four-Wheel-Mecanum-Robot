@@ -57,8 +57,7 @@ void usart6_send_float(float val, uint8_t decimals)
 }
 
 // ============================================================================
-// RX — nhan lenh dieu khien thoi gian thuc (them cho dieu khien ban phim
-// qua ESP32). Doc chi tiet thiet ke o project doc "dieu_khien_ban_phim_esp32".
+// RX — nhan lenh dieu khien tu 1 ESP32 khac (ha tang, main.c chua tich hop).
 //
 // Chan PC7 = USART6_RX (AF8), dung chung baudrate/BRR da cau hinh trong
 // usart6_init() o tren (KHONG dung lai duoc neu chua goi usart6_init()

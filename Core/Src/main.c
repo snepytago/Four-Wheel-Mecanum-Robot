@@ -19,8 +19,8 @@ int main(void)
     motor_init();
     encoder_init();
     usart6_init();
-    usart6_rx_init();   // RX (PC7) - nhan lenh dieu khien tu ESP32; khong anh huong
-                         // gi neu TELEOP_MODE_ENABLE=0, chi lang nghe thu dong
+    usart6_rx_init();   // RX (PC7) - san sang nhan lenh tu 1 ESP32 khac sau nay;
+                         // hien CHUA duoc doc/parse trong vong dieu khien ben duoi
 
     usart6_send_string("STM32:BOOT\r\n");
 
@@ -39,104 +39,12 @@ int main(void)
         usart6_send_string("STM32:MPU_NOT_FOUND\r\n");
     }
 
-//    robot_set_velocity(0.0f, 0.0f, 0.3f);
-
     encoder_reset_all();
     odometry_reset();
     usart6_send_string("STM32:RUNNING\r\n");
 
-#if TELEOP_MODE_ENABLE
-    // === Dieu khien thoi gian thuc bang ban phim (ESP32 server -> ESP32 tren
-    // robot -> UART6 RX). Khong co dieu kien tu dung nao khac ngoai watchdog
-    // mat tin hieu - chay vo han cho toi khi nguoi dung tat nguon. ===
-    usart6_send_string("STM32:TELEOP_READY\r\n");
-
-    uint32_t last_cmd_tick   = HAL_GetTick();
-    uint32_t last_step_tp    = HAL_GetTick();
-    uint32_t last_dt_tick_tp = last_step_tp;
-    float vx_cmd = 0.0f, vy_cmd = 0.0f, wz_cmd_tp = 0.0f;
-    char line_buf[USART6_RX_LINE_MAXLEN];
-
-    while (1) {
-        // ---- 1. Doc lenh moi tu ESP32 (dong "V,<vx_mm>,<vy_mm>,<wz_mrad>") ----
-        if (usart6_rx_line_ready()) {
-            usart6_rx_get_line(line_buf, sizeof(line_buf));
-
-            int a, b, c;
-            if (line_buf[0] == 'V' && line_buf[1] == ',' &&
-                sscanf(line_buf + 2, "%d,%d,%d", &a, &b, &c) == 3) {
-
-                float vx = (float)a / 1000.0f;   // mm/s  -> m/s
-                float vy = (float)b / 1000.0f;   // mm/s  -> m/s
-                float wz = (float)c / 1000.0f;   // mrad/s -> rad/s
-
-                if (vx >  TELEOP_VX_MAX_MPS)  vx =  TELEOP_VX_MAX_MPS;
-                if (vx < -TELEOP_VX_MAX_MPS)  vx = -TELEOP_VX_MAX_MPS;
-                if (vy >  TELEOP_VY_MAX_MPS)  vy =  TELEOP_VY_MAX_MPS;
-                if (vy < -TELEOP_VY_MAX_MPS)  vy = -TELEOP_VY_MAX_MPS;
-                if (wz >  TELEOP_WZ_MAX_RADS) wz =  TELEOP_WZ_MAX_RADS;
-                if (wz < -TELEOP_WZ_MAX_RADS) wz = -TELEOP_WZ_MAX_RADS;
-
-                vx_cmd    = vx;
-                vy_cmd    = vy;
-                wz_cmd_tp = wz;
-                last_cmd_tick = HAL_GetTick();
-            }
-            // dong khong parse duoc -> bo qua, GIU NGUYEN lenh cu (watchdog o
-            // duoi se tu ep ve 0 neu THUC SU mat tin hieu qua lau, khong phai
-            // vi loi rac 1 dong don le)
-        }
-
-        // ---- 2. Watchdog: mat tin hieu qua TELEOP_CMD_TIMEOUT_MS -> ep dung ----
-        // Day la lop an toan thu 3 (sau ESP32 server va ESP32 tren robot).
-        if (HAL_GetTick() - last_cmd_tick > TELEOP_CMD_TIMEOUT_MS) {
-            vx_cmd    = 0.0f;
-            vy_cmd    = 0.0f;
-            wz_cmd_tp = 0.0f;
-        }
-
-        // ---- 3. Vong dieu khien 50Hz (giu nhip giong cac kich ban test) ----
-        if (HAL_GetTick() - last_step_tp >= CONTROL_DT_MS) {
-            last_step_tp += CONTROL_DT_MS;
-
-            uint32_t now_tick_tp = HAL_GetTick();
-            float dt_s = (now_tick_tp - last_dt_tick_tp) / 1000.0f;
-            last_dt_tick_tp = now_tick_tp;
-
-            int32_t dcnt[4];
-            encoder_get_deltas(dcnt);
-
-            if (imu_ready) {
-                mpu6050_update(dt_s);
-            }
-            odometry_update(dcnt, dt_s);
-
-            // Dieu khien TRUC TIEP: wz tu ban phim di thang vao IK, khong tu
-            // dong giu huong - nguoi lai tu quan sat quy dao bang mat va tu
-            // chinh bang Q/E khi can (theo yeu cau, bo lai P-controller giu
-            // huong tung them truoc do).
-            robot_set_velocity(vx_cmd, vy_cmd, wz_cmd_tp);
-
-            usart6_send_string("POSE,");
-            usart6_send_float(odometry_get_x(), 3);          usart6_send_char(',');
-            usart6_send_float(odometry_get_y(), 3);          usart6_send_char(',');
-            usart6_send_float(odometry_get_theta_deg(), 2);
-            usart6_send_string("\r\n");
-        }
-    }
-    // khong bao gio toi day - teleop chay vo han, chi dung bang mat tin hieu
-#else
     uint32_t last_step   = HAL_GetTick();
     uint32_t last_dt_tick = last_step;
-    uint32_t start_tick  = last_step;   // moc thoi gian t=0 cho quy dao cung tron (e)
-
-    // --- Trang thai cho test hinh vuong (SQUARE) ---
-    uint8_t sq_seg    = 0;      // 0..3: chi so canh dang di (0=+X,1=+Y,2=-X,3=-Y), nguoc kim dong ho
-    float   sq_seg_x0 = 0.0f;   // toa do (x,y) tai thoi diem BAT DAU canh hien tai
-    float   sq_seg_y0 = 0.0f;
-    uint8_t sq_done   = 0;
-    const float SQ_DIR_X[4] = {  1.0f, 0.0f, -1.0f,  0.0f };
-    const float SQ_DIR_Y[4] = {  0.0f, 1.0f,  0.0f, -1.0f };
 
     while (1) {
         if (HAL_GetTick() - last_step >= CONTROL_DT_MS) {
@@ -164,42 +72,13 @@ int main(void)
                 usart6_send_string("\r\n");
             }
 
+            // Van toc tinh tien muc tieu trong he THE GIOI - mac dinh 0 (robot
+            // dung yen, chi tu giu huong bang gyro). TODO sau nay: doc tu lenh
+            // nhan qua UART6 RX (usart6_rx_line_ready()/usart6_rx_get_line(),
+            // gui tu 1 ESP32 khac) thay vi hang so 0.0f co dinh o day.
+            float target_vx_world = 0.0f;
+            float target_vy_world = 0.0f;
 
-#if TEST_SQUARE_ENABLE
-            // --- Test hinh vuong: 4 doan thang lien tiep, GIU NGUYEN huong, khong quay o goc ---
-            float dir_x = SQ_DIR_X[sq_seg];
-            float dir_y = SQ_DIR_Y[sq_seg];
-
-            float target_vx_world = sq_done ? 0.0f : SQUARE_SPEED_MPS * dir_x;
-            float target_vy_world = sq_done ? 0.0f : SQUARE_SPEED_MPS * dir_y;
-
-            // Quang duong da di DUNG THEO HUONG canh hien tai (chieu vi tri len vector dir),
-            // khong dung khoang cach Euclid tho de tranh dung som/tre khi bi lech ngang chut it
-            float seg_dx = odometry_get_x() - sq_seg_x0;
-            float seg_dy = odometry_get_y() - sq_seg_y0;
-            float seg_dist = seg_dx * dir_x + seg_dy * dir_y;
-
-            if (!sq_done && seg_dist >= SQUARE_SIDE_M) {
-                sq_seg_x0 = odometry_get_x();
-                sq_seg_y0 = odometry_get_y();
-                sq_seg++;
-                if (sq_seg >= 4) sq_done = 1;
-            }
-#elif TEST_ARC_ENABLE
-            // --- Test (e): quy dao tham so cua cung tron ban kinh r1 quanh tam O ---
-            // Chon O sao cho robot xuat phat dung tren duong tron: x(t)=r1*sin(phase), y(t)=r1*(1-cos(phase))
-            // => van toc tiep tuyen trong he THE GIOI la dao ham theo t:
-            float t_s   = (now_tick - start_tick) / 1000.0f;      // thoi gian tinh tu luc bat dau di (giay)
-            float phase = TEST_ARC_OMEGA_RADS * t_s;               // rad da quet quanh O tu luc xuat phat
-
-            float target_vx_world = TEST_ARC_R1_M * TEST_ARC_OMEGA_RADS * cosf(phase);
-            float target_vy_world = TEST_ARC_R1_M * TEST_ARC_OMEGA_RADS * sinf(phase);
-#else
-            float target_vx_world = TARGET_VX_WORLD;
-            float target_vy_world = TARGET_VY_WORLD;
-#endif
-
-            // main.c — trong control loop, thay khoi robot_set_velocity hien tai
             float theta_now_deg = odometry_get_theta_deg();
             float theta_now_rad = theta_now_deg * 0.017453293f;   // deg -> rad
 
@@ -207,8 +86,9 @@ int main(void)
             float vx_body =  target_vx_world * cosf(theta_now_rad) + target_vy_world * sinf(theta_now_rad);
             float vy_body = -target_vx_world * sinf(theta_now_rad) + target_vy_world * cosf(theta_now_rad);
 
-            // theta_now se ~THETA_TARGET_DEG suot qua trinh (test e KHONG doi huong), vong nay
-            // chi co tac dung "ghim" lai neu bi truot/nhieu, dung y het test thang
+            // Vong giu huong bang gyro (P-controller): sai so so voi THETA_TARGET_DEG,
+            // gioi han +-HEADING_MAX_WZ - dung y het cau hinh dieu khien truoc khi
+            // co cac kich ban test rieng (cung tron/hinh vuong).
             float theta_err_deg = THETA_TARGET_DEG - theta_now_deg;
             float wz_cmd = HEADING_KP * theta_err_deg;
             if (wz_cmd >  HEADING_MAX_WZ) wz_cmd =  HEADING_MAX_WZ;
@@ -221,48 +101,8 @@ int main(void)
             usart6_send_float(odometry_get_y(), 3);          usart6_send_char(',');
             usart6_send_float(odometry_get_theta_deg(), 2);
             usart6_send_string("\r\n");
-
-#if TEST_SQUARE_ENABLE
-            // Trang thai hinh vuong: canh dang di (0..3) + quang duong da di tren canh do (de overlay Excel)
-            usart6_send_string("SQ,");
-            usart6_send_int(sq_seg);                usart6_send_char(',');
-            usart6_send_float(seg_dist, 3);
-            usart6_send_string("\r\n");
-
-            // --- Dieu kien dung: da di het ca 4 canh (sq_done=1, dat trong nhanh tinh o tren) ---
-            if (sq_done) break;
-#elif TEST_ARC_ENABLE
-            // Vi tri THAM CHIEU ly thuyet tren cung tron (de overlay so sanh voi POSE thuc te trong Excel)
-            usart6_send_string("ARC_REF,");
-            usart6_send_float(TEST_ARC_R1_M * sinf(phase), 3);              usart6_send_char(',');
-            usart6_send_float(TEST_ARC_R1_M * (1.0f - cosf(phase)), 3);
-            usart6_send_string("\r\n");
-
-            // --- Dieu kien dung: da quet du goc cung mong muon ---
-            float arc_done_deg = phase * (180.0f / PI);
-            if (arc_done_deg >= TEST_ARC_ANGLE_DEG) break;
-#else
-            // --- Dieu kien dung: khoang cach Euclidean tu goc, khong phai chi rieng truc x ---
-            float dist = sqrtf(odometry_get_x() * odometry_get_x()
-                              + odometry_get_y() * odometry_get_y());
-            if (dist >= TARGET_DIST_M) break;
-#endif
         }
     }
-
-    motor_set_all(0.0f, 0.0f, 0.0f, 0.0f);
-
-    // Xuat tong so xung encoder tich luy tu luc encoder_reset_all() dau lenh chay
-    usart6_send_string("ENC,");
-    usart6_send_int(encoder_get_count_signed(MOTOR_FL)); usart6_send_char(',');
-    usart6_send_int(encoder_get_count_signed(MOTOR_FR)); usart6_send_char(',');
-    usart6_send_int(encoder_get_count_signed(MOTOR_RL)); usart6_send_char(',');
-    usart6_send_int(encoder_get_count_signed(MOTOR_RR));
-    usart6_send_string("\r\n");
-
-    usart6_send_string("STM32:DONE\r\n");
-    while (1) { }
-#endif
 }
 
 void Error_Handler(void)
