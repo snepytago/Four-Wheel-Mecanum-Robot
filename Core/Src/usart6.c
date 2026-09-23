@@ -57,38 +57,44 @@ void usart6_send_float(float val, uint8_t decimals)
 }
 
 // ============================================================================
-// RX — nhan lenh dieu khien tu 1 ESP32 khac (ha tang, main.c chua tich hop).
+// RX - nhan lenh tu gateway (qua esp32R) tren chan PC7 (AF8), dung chung
+// baudrate/BRR da cau hinh trong usart6_init() (PHAI goi usart6_init() truoc).
 //
-// Chan PC7 = USART6_RX (AF8), dung chung baudrate/BRR da cau hinh trong
-// usart6_init() o tren (KHONG dung lai duoc neu chua goi usart6_init()
-// truoc, vi ham nay khong tu bat lai UE/BRR).
+// Co che: ngat RXNE nhan tung byte -> gom vao rx_building -> gap ky tu ket
+// thuc ('\n', '\r' hoac '#') thi day ca dong vao HANG DOI vong (ring buffer)
+// de main loop doc dan. Hang doi nhieu dong la bat buoc vi gateway ban cac
+// dong theo cum trong vai ms, con main loop chi doc 50 lan/giay.
 //
-// Co che: nhan tung byte bang ngat RXNE (khong dung DMA/polling trong
-// main loop) -> gom vao buffer "dang xay" (rx_building) -> gap '\n' hoac
-// '\r' thi sao chep sang buffer "san sang" (rx_line_ready_buf) va bat co
-// cho main loop biet co lenh moi.
+// Con tro: rx_head do IRQ tang (ghi vao), rx_tail do main loop tang (doc ra).
+// Hang doi coi la DAY khi con 1 o trong - de phan biet ro "day" voi "rong"
+// ma khong can bien dem rieng (tranh phai khoa giua IRQ va main loop).
 // ============================================================================
 
-static volatile char     rx_line_ready_buf[USART6_RX_LINE_MAXLEN];
-static volatile uint16_t rx_line_ready_len = 0;
-static volatile uint8_t  rx_line_ready_flag = 0;
+static volatile char     rx_q[USART6_RX_QUEUE_LEN][USART6_RX_LINE_MAXLEN];
+static volatile uint16_t rx_q_len[USART6_RX_QUEUE_LEN];
+static volatile uint16_t rx_head = 0;
+static volatile uint16_t rx_tail = 0;
+static volatile uint32_t rx_dropped = 0;
 
 static volatile char     rx_building[USART6_RX_LINE_MAXLEN];
 static volatile uint16_t rx_building_len = 0;
 
 void usart6_rx_init(void)
 {
-    // Clock GPIOC + USART6 da duoc bat trong usart6_init() (TX) - ham nay
-    // PHAI duoc goi SAU usart6_init().
+    // Clock GPIOC + USART6 da bat trong usart6_init() (TX).
 
     // PC7 = Alternate Function AF8 (USART6_RX)
     GPIOC->MODER &= ~(3u << 14);
     GPIOC->MODER |=  (2u << 14);        // 10: Alternate function mode
 
     GPIOC->PUPDR &= ~(3u << 14);
-    GPIOC->PUPDR |=  (1u << 14);        // pull-up: tranh doc nhieu khi chua noi day ESP32
+    GPIOC->PUPDR |=  (1u << 14);        // pull-up: tranh doc nhieu khi chua noi day
 
     GPIOC->AFR[0] = (GPIOC->AFR[0] & ~(0xFu << 28)) | (0x8u << 28);   // AF8 = USART6_RX tren PC7
+
+    rx_head = rx_tail = 0;
+    rx_building_len = 0;
+    rx_dropped = 0;
 
     USART6->CR1 |= USART_CR1_RE | USART_CR1_RXNEIE;
 
@@ -98,20 +104,30 @@ void usart6_rx_init(void)
 
 uint8_t usart6_rx_line_ready(void)
 {
-    return rx_line_ready_flag;
+    return (rx_head != rx_tail) ? 1 : 0;
 }
 
 void usart6_rx_get_line(char *out_buf, uint16_t max_len)
 {
-    NVIC_DisableIRQ(USART6_IRQn);
+    if (rx_head == rx_tail) {       // khong co dong nao -> tra chuoi rong
+        if (max_len > 0) out_buf[0] = '\0';
+        return;
+    }
 
-    uint16_t n = rx_line_ready_len;
+    uint16_t n = rx_q_len[rx_tail];
     if (n > (uint16_t)(max_len - 1)) n = (uint16_t)(max_len - 1);
-    memcpy(out_buf, (const void *)rx_line_ready_buf, n);
-    out_buf[n] = '\0';
-    rx_line_ready_flag = 0;
 
-    NVIC_EnableIRQ(USART6_IRQn);
+    memcpy(out_buf, (const void *)rx_q[rx_tail], n);
+    out_buf[n] = '\0';
+
+    // Chi tang tail SAU khi da copy xong: IRQ nhin vao tail de biet o nao
+    // con ban, nen o dang doc phai duoc giu den giay cuoi cung.
+    rx_tail = (uint16_t)((rx_tail + 1) % USART6_RX_QUEUE_LEN);
+}
+
+uint32_t usart6_rx_get_dropped(void)
+{
+    return rx_dropped;
 }
 
 void USART6_IRQHandler(void)
@@ -119,17 +135,23 @@ void USART6_IRQHandler(void)
     if (USART6->SR & USART_SR_RXNE) {
         char c = (char)(USART6->DR & 0xFF);   // doc DR cung tu xoa co RXNE
 
-        if (c == '\n' || c == '\r') {
-            if (rx_building_len > 0 && !rx_line_ready_flag) {
-                memcpy((void *)rx_line_ready_buf, (const void *)rx_building, rx_building_len);
-                rx_line_ready_len = rx_building_len;
-                rx_line_ready_flag = 1;
+        if (c == '\n' || c == '\r' || c == '#') {
+            if (rx_building_len > 0) {
+                uint16_t next = (uint16_t)((rx_head + 1) % USART6_RX_QUEUE_LEN);
+
+                if (next == rx_tail) {
+                    rx_dropped++;          // hang doi day -> bo dong nay
+                } else {
+                    memcpy((void *)rx_q[rx_head], (const void *)rx_building, rx_building_len);
+                    rx_q_len[rx_head] = rx_building_len;
+                    rx_head = next;
+                }
             }
             rx_building_len = 0;
         } else if (rx_building_len < (USART6_RX_LINE_MAXLEN - 1)) {
             rx_building[rx_building_len++] = c;
         } else {
-            rx_building_len = 0;   // dong qua dai/mat dong bo -> huy, doi ky tu xuong dong tiep
+            rx_building_len = 0;   // dong qua dai/mat dong bo -> huy, doi dong tiep
         }
     }
 

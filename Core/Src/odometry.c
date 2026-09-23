@@ -14,6 +14,12 @@ void odometry_reset(void)
     pos_y = 0.0f;
 }
 
+void odometry_set_pose(float x_m, float y_m)
+{
+    pos_x = x_m;
+    pos_y = y_m;
+}
+
 void odometry_update(const int32_t dcnt[4], float dt_s)
 {
     if (dt_s <= 0.0f) return;   // tranh chia 0 hoac buoc thoi gian bat thuong

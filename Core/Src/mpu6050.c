@@ -156,3 +156,5 @@ int16_t mpu6050_get_accel_y(void)    { return accel_y; }
 int16_t mpu6050_get_accel_z(void)    { return accel_z; }
 float   mpu6050_get_gyro_z_dps(void) { return gyro_z_dps; }
 float   mpu6050_get_yaw_deg(void)    { return yaw_angle_deg; }
+
+void    mpu6050_set_yaw_deg(float yaw_deg) { yaw_angle_deg = yaw_deg; }
