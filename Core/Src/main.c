@@ -55,6 +55,17 @@ int main(void)
 
     encoder_reset_all();
     odometry_reset();
+
+#if POSE_CHECK_ENABLE
+    // Chi doc, khong chay dong co. Chay sau hieu chuan IMU de co ca 2 nguon goc.
+    pose_theta_check_run(imu_ready);
+#endif
+
+#if STRAIGHT_TEST_ENABLE
+    // Chay thang qua dung duong van hanh that - CAN khoang trong phia truoc.
+    straight_test_run(imu_ready);
+#endif
+
     usart6_send_string("STM32:RUNNING\r\n");
 
     uint32_t last_step   = HAL_GetTick();

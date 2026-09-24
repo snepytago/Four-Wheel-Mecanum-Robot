@@ -31,14 +31,14 @@ STM32F401RETX_*.ld       — linker script (Flash / RAM)
 |---|---|
 | `config.h` | Hằng số cấu hình trung tâm: PWM, hình học robot, hệ số hiệu chỉnh, chu kỳ điều khiển, tham số vòng giữ hướng, tham số nguồn pose camera |
 | `gpio.h/c` | Cấu hình chân GPIO điều khiển chiều quay (DIR) 4 động cơ + chân STBY driver |
-| `motor.h/c` | Driver PWM (TIM1, 4 kênh, ~105 kHz) + logic set chiều quay/tốc độ từng bánh |
+| `motor.h/c` | Driver PWM (TIM1, 4 kênh, ~105 kHz) + logic set chiều quay/tốc độ từng bánh. `speed_to_duty()` dùng mô hình `duty = OFFSET[bánh] + K_FF·|ω|` — mỗi bánh một hằng số offset riêng, hiệu chỉnh từ bài đo ngưỡng PWM |
 | `encoder.h/c` | Đọc encoder 4 bánh bằng Timer Encoder Mode (TIM2/TIM3/TIM4/TIM5), xử lý tràn 16/32-bit |
 | `kinematics.h/c` | Động học thuận (FK) & nghịch (IK) cho mecanum 4 bánh |
 | `mpu6050.h/c` | Driver I2C1 mức thanh ghi cho MPU6050, hiệu chuẩn bias + tích phân gyro Z ra góc yaw, cho phép ghi đè yaw từ nguồn tuyệt đối |
 | `odometry.h/c` | Ước lượng vị trí (x, y): FK từ encoder cho vận tốc, góc θ lấy trực tiếp từ IMU; cho phép ghi đè (x, y) từ nguồn tuyệt đối |
 | `pose_link.h/c` | Parse dòng lệnh nhận được từ gateway, giữ pose mới nhất + watchdog + bộ đếm gói theo từng loại |
 | `usart6.h/c` | TX: telemetry 115200 baud. RX: ngắt RXNE gom dòng vào **hàng đợi vòng 8 dòng** (PC7) |
-| `pwm_test.h/c` | Bài đo ngưỡng PWM khởi động 4 bánh (2 pha) — xem [Đo ngưỡng PWM khởi động](#đo-ngưỡng-pwm-khởi-động-4-bánh) |
+| `pwm_test.h/c` | 4 bài đo/kiểm tra độc lập, mỗi bài chiếm toàn quyền lúc boot rồi treo lại (không rơi xuống vòng điều khiển bình thường) — xem [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn) |
 | `robot_control.h/c` | API cấp cao duy nhất: `robot_set_velocity(vx, vy, wz)` → tự IK + xuất PWM 4 bánh |
 | `main.c` | Boot → hiệu chuẩn IMU → vòng lặp 50 Hz: đọc pose + encoder + IMU → odometry → ghi đè pose khi có khung hình mới → vòng P-controller giữ hướng → `robot_set_velocity()` → log telemetry |
 
@@ -61,13 +61,15 @@ vy = (R/4)·(−ωFL + ωFR + ωRL − ωRR)
 ωz = (R/4K)·(−ωFL + ωFR − ωRL + ωRR)
 ```
 
+**Duty PWM (feed-forward + offset bù ma sát tĩnh):** `duty = OFFSET[bánh] + K_FF · |ω|`, mỗi bánh một `OFFSET` riêng (`MOTOR_DUTY_OFFSET_FL/FR/RL/RR` trong `config.h`). Bản cũ chỉ nhân `K_FF · |ω|` (không offset) sai về nguyên tắc: ở tốc độ thấp duty rơi xuống dưới ngưỡng ma sát tĩnh nên bánh đứng im, còn ở tốc độ cao lại cấp thừa — hai sai số ngược chiều nên chỉnh riêng `K_FF` không bao giờ sửa được cả dải tốc độ. `K_FF = 23.3` và các `OFFSET` hiện tại đến từ 4 bài đo thực tế ngày 23–24/09/2026 (xem [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn)).
+
 **Vòng hiệu chỉnh hướng (P-controller):** yaw đo từ MPU6050 so với `THETA_TARGET_DEG`, sai số nhân `HEADING_KP` (giới hạn ±`HEADING_MAX_WZ`) rồi cộng thẳng vào lệnh `ωz`.
 
 **Odometry (fusion encoder + IMU + camera):** vận tốc thân xe lấy từ FK trên encoder, góc θ lấy từ IMU, và mỗi khi có khung hình mới từ camera thì `(x, y, θ)` được ghi đè bằng giá trị tuyệt đối đo được. Giữa hai khung hình, encoder + gyro tiếp tục tích phân để giữ nhịp 50 Hz — camera sửa sai số tích luỹ, odometry lấp khoảng trống giữa các khung và giữ robot không bị mù khi marker tạm bị che.
 
 ## Vòng lặp điều khiển chính
 
-> Chỉ chạy tới đây khi cả `PWM_TEST_ENABLE` và `PWM_TEST2_ENABLE` đều = 0 trong `config.h` — xem cảnh báo ở mục [Đo ngưỡng PWM khởi động](#đo-ngưỡng-pwm-khởi-động-4-bánh) về trạng thái hiện tại.
+> Chỉ chạy tới đây khi cả 4 cờ bài đo (`PWM_TEST_ENABLE`, `PWM_TEST2_ENABLE`, `POSE_CHECK_ENABLE`, `STRAIGHT_TEST_ENABLE`) đều = 0 trong `config.h` — xem cảnh báo ở mục [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn) về trạng thái hiện tại.
 
 1. `pose_link_poll()` — vét hàng đợi các dòng đã về qua ngắt UART6 RX.
 2. Đọc delta-encoder 4 bánh + cập nhật IMU → `odometry_update()`.
@@ -102,16 +104,23 @@ Camera trần --ảnh--> PC (OpenCV + ArUco)
 
 Tham số phía STM32 trong `config.h`: `POSE_LINK_ENABLE`, `POSE_LINK_TIMEOUT_MS`, `POSE_XY_ABS_MAX_CM`, `POSE_YAW_ALPHA`, `POSE_LOG_EVERY_N`.
 
-## Đo ngưỡng PWM khởi động 4 bánh
+## Các bài đo & kiểm tra hiệu chuẩn
 
-Feed-forward `K_FF` hiện là tuyến tính thuần (`duty = K_FF · |speed|`), nhưng thực tế mỗi bánh cần một **duty tối thiểu** để thắng ma sát tĩnh trước khi bắt đầu quay — dưới ngưỡng đó động cơ chỉ "è è" mà không nhúc nhích. Vòng go-to-point sau này sẽ bị "chết cứng" cách đích vài cm nếu không biết con số này để đặt `V_MIN`. `pwm_test.c` đo ngưỡng này theo 2 pha, bật/tắt bằng `PWM_TEST_ENABLE`/`PWM_TEST2_ENABLE` trong `config.h` (chỉ bật **1 trong 2** cùng lúc):
+`pwm_test.c` gom 4 bài đo/kiểm tra độc lập, mỗi bài bật bằng 1 cờ riêng trong `config.h` (`PWM_TEST_ENABLE`, `PWM_TEST2_ENABLE`, `POSE_CHECK_ENABLE`, `STRAIGHT_TEST_ENABLE`) — **chỉ nên bật 1 cờ tại một thời điểm**. Cả 4 đều chạy **một lần lúc boot rồi treo lại** in kết quả lặp định kỳ, **không bao giờ** rơi xuống vòng điều khiển bình thường.
 
-- **Pha 1** (`pwm_test_run`, không tải — bánh kê lên khỏi mặt sàn): tăng dần duty từng bánh một, dùng encoder làm trọng tài ("đã quay" = đủ `PWM_TEST_MIN_COUNTS` xung liên tục `PWM_TEST_CONFIRM_STEPS` nấc). Chỉ dùng để so sánh 4 động cơ với nhau (bánh nào lệch hẳn = hộp số kẹt/dây lỏng/driver yếu), **không** dùng số đo được làm `V_MIN` vì thiếu ma sát sàn và quán tính robot thật.
-- **Pha 2** (`pwm_test2_run`, trên sàn thật — cả 4 bánh cùng duty, đi tới/lui xen kẽ): trọng tài là **camera** (qua `pose_link`), không phải encoder, vì ở duty thấp có bánh đã quay trong khi bánh khác còn kẹt — robot không dịch chuyển dù encoder vẫn ghi nhận có chuyển động (bánh quay trượt tại chỗ). Cần gateway + camera đang chạy (có pose hợp lệ) trước khi đo. Encoder vẫn được ghi song song — chênh lệch quãng đường bánh lăn được so với quãng đường robot thật đo bằng camera chính là **độ trượt** của bánh mecanum trên mặt sàn.
+**1. Pha 1 — ngưỡng PWM không tải** (`pwm_test_run`, `PWM_TEST_ENABLE`): bánh kê lên khỏi mặt sàn, tăng dần duty từng bánh một, dùng encoder làm trọng tài. Chỉ dùng để so sánh 4 động cơ với nhau (bánh lệch hẳn = hộp số kẹt/dây lỏng/driver yếu), **không** dùng số đo được làm `V_MIN` vì thiếu ma sát sàn và quán tính robot thật. Log: `PWMT,<bánh>,<duty>,<số_xung>,<rad/s>`, `PWMTH,<bánh>,<duty_ngưỡng>`, `PWMSUM,<FL>,<FR>,<RL>,<RR>`.
 
-Cả hai pha chạy **một lần lúc boot rồi treo lại** in kết quả lặp định kỳ — **không bao giờ** rơi xuống vòng điều khiển bình thường bên dưới. Log dạng `PWMT,<bánh>,<duty>,<số_xung>,<rad/s>` (mỗi nấc), `PWMTH,<bánh>,<duty_ngưỡng>` (đã chốt, pha 1) hoặc `PWMT2,<duty>,<F|B>,<d_cam_mm>,<v_cam>,<v_enc>,<trượt_%>` / `PWMTH2,<duty_ngưỡng>,<v_cam_tại_ngưỡng>` (pha 2).
+**Kết quả đo được (23/09/2026), đã đưa vào `config.h`:** ngưỡng khởi động không tải FL=90, FR=115, RL=125, RR=115 (lệch tới 39% giữa các bánh).
 
-> **Cấu hình hiện tại trong `config.h`: `PWM_TEST_ENABLE = 0`, `PWM_TEST2_ENABLE = 1`** — nạp firmware như đang có trong repo sẽ chạy **bài đo pha 2**, không phải vòng điều khiển bình thường (robot sẽ tự đi tới/lui từng nấc duty, không giữ yên/giữ hướng như mô tả ở các mục trên). Nhớ đặt `PWM_TEST2_ENABLE = 0` rồi nạp lại khi muốn quay về vòng điều khiển bình thường.
+**2. Pha 2 — trên sàn thật, camera làm trọng tài** (`pwm_test2_run`, `PWM_TEST2_ENABLE`): cả 4 bánh cùng duty, đi tới/lui xen kẽ. Trọng tài là **camera** (qua `pose_link`), không phải encoder — ở duty thấp có bánh đã quay trong khi bánh khác còn kẹt, robot không dịch chuyển dù encoder vẫn ghi nhận có chuyển động (bánh quay trượt tại chỗ). Cần gateway + camera đang chạy (có pose hợp lệ). Encoder vẫn ghi song song — chênh lệch quãng đường bánh lăn được so với quãng đường robot thật đo bằng camera chính là **độ trượt** bánh mecanum trên sàn. `PWM_TEST2_USE_OFFSET=1`: mỗi bánh cộng thêm offset riêng đã đo ở pha 1 (`PWM_TH_FL/FR/RL/RR`) rồi mới quét chung — vừa đo vừa thử luôn cách bù vùng chết. Log: `PWMT2,<duty>,<F|B>,<d_cam_mm>,<v_cam>,<v_enc>,<trượt_%>,<dtheta_deg>,<x_mm>,<y_mm>,<dFL>,<dFR>,<dRL>,<dRR>`, `PWMTH2,<duty_ngưỡng>,<v_cam_tại_ngưỡng>`.
+
+**3. Kiểm tra dấu θ camera** (`pose_theta_check_run`, `POSE_CHECK_ENABLE`): không chạy động cơ, chỉ in song song θ từ camera và yaw từ gyro trong lúc xoay robot bằng tay, để xác nhận hai nguồn cùng chiều dương trước khi tin số liệu ghi đè lẫn nhau. Log: `THCHK,<valid>,<th_cam>,<yaw_gyro>,<d_cam>,<d_gyro>`, kết luận in ra khi đã xoay đủ 30°.
+
+**Đã chạy 24/09/2026 — kết luận: camera và gyro CÙNG CHIỀU**, lệch nhau 0.1° sau khi xoay 90° (quy ước đúng, giữ nguyên). Độ nhiễu θ camera lúc đứng yên: lệch chuẩn 0.53° (dùng làm R cho Kalman filter sau này nếu cần).
+
+**4. Chạy thẳng — kiểm chứng K_FF, vòng giữ hướng, độ trễ camera** (`straight_test_run`, `STRAIGHT_TEST_ENABLE`): đi qua đúng đường vận hành thật (odometry → ghi đè pose → vòng giữ hướng → `robot_set_velocity()`, không ghi thẳng PWM như 2 bài trên), tăng tốc dần lên `ST_TARGET_V` (0.15 m/s, trên `ROBOT_V_MIN`), giữ vài giây, rồi cắt lệnh đột ngột và tiếp tục theo dõi để đo độ trễ camera. Cần gateway + camera đang chạy và >1.5m khoảng trống phía trước. Log: `ST,<t_ms>,<v_cmd>,<x_mm>,<y_mm>,<th_cam>,<yaw>,<th_err>,<d_enc_mm>,<d_cam_mm>`, `STSUM,...`.
+
+> **Cấu hình hiện tại trong `config.h`: `STRAIGHT_TEST_ENABLE = 1`, 3 cờ còn lại = 0** — nạp firmware như đang có trong repo sẽ chạy **bài chạy thẳng** (mục 4), không phải vòng điều khiển bình thường. Đặt cả 4 cờ về 0 rồi nạp lại khi muốn quay về vòng điều khiển bình thường (đứng yên + tự giữ hướng).
 
 ## Cách test khi chưa có camera
 
@@ -127,12 +136,12 @@ Cả hai pha chạy **một lần lúc boot rồi treo lại** in kết quả l�
 
 ## Trạng thái & hướng phát triển tiếp theo
 
-Đã xong: driver PWM/encoder/IMU/UART (TX + RX có hàng đợi), động học IK/FK, odometry fusion, vòng giữ hướng bằng gyro, hiệu chỉnh tĩnh `K_FF` (66.0 → 29.3, chưa verify lại lần 2), kênh nhận vị trí tuyệt đối từ camera trần qua gateway ESP-NOW, và bài đo ngưỡng PWM khởi động 4 bánh (2 pha, xem mục trên).
+Đã xong: driver PWM/encoder/IMU/UART (TX + RX có hàng đợi), động học IK/FK, odometry fusion, vòng giữ hướng bằng gyro, kênh nhận vị trí tuyệt đối từ camera trần qua gateway ESP-NOW, bộ 4 bài đo/kiểm tra hiệu chuẩn (`pwm_test.c`), hiệu chuẩn `K_FF=23.3` + offset PWM riêng từng bánh đã đưa vào `motor.c` (từ dữ liệu đo thật 23–24/09/2026), và đối chiếu xác nhận quy ước dấu θ giữa camera và gyro (cùng chiều, đúng).
 
 Đang thiếu / dự kiến làm tiếp:
-- Đặt `V_MIN` trong vòng điều khiển từ kết quả đo ngưỡng PWM (pha 2), hiện mới có bài đo chứ chưa đưa số vào `speed_to_duty()`.
-- Đối chiếu thực nghiệm gốc toạ độ, chiều trục và dấu θ giữa camera và firmware.
+- Đọc kết quả bài chạy thẳng (`straight_test_run`, đang bật) để xác nhận `K_FF`/offset mới đã đủ chính xác, hoặc hiệu chỉnh thêm.
+- Đưa `ROBOT_V_MIN`/`MOTOR_OMEGA_MIN` vào vòng go-to-point khi viết (hiện mới là hằng số ghi lại cận trên, chưa có chỗ nào enforce).
 - Xử lý `START`/`STOP`: cờ cho phép chạy trong vòng điều khiển.
 - Xử lý `WPLIST`/`WPCLR` + vòng go-to-point bám lần lượt từng điểm đích, kèm điều kiện dừng khi mất pose.
-- Vòng phản hồi tốc độ (PID) theo encoder cho từng bánh — hiện chỉ là feed-forward tuyến tính (`K_FF`).
+- Vòng phản hồi tốc độ (PID) theo encoder cho từng bánh — hiện chỉ là feed-forward + offset tĩnh.
 - Đồng bộ lại `FWMR_run_test.ioc` với cấu hình phần cứng thực tế.

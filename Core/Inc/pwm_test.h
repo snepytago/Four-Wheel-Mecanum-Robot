@@ -1,6 +1,8 @@
 #ifndef PWM_TEST_H
 #define PWM_TEST_H
 
+#include <stdint.h>
+
 // Bai do NGUONG PWM khoi dong cua 4 banh.
 //
 // Muc dich: tim duty nho nhat lam banh bat dau quay. Duoi nguong nay dong co
@@ -58,10 +60,54 @@ void pwm_test_run(void);
 // o toc do co dinh trong vai giay.
 //
 // Dinh dang log:
-//   PWMT2,<duty>,<F|B>,<d_cam_mm>,<v_cam>,<v_enc>,<truot_%>
+//   PWMT2,<duty>,<F|B>,<d_cam_mm>,<v_cam>,<v_enc>,<truot_%>,
+//         <dtheta_deg>,<x_mm>,<y_mm>,<dFL>,<dFR>,<dRL>,<dRR>
 //   PWMTH2,<duty_nguong>,<v_cam_tai_nguong>   - nguong da xac nhan = V_MIN
 //   PWMSUM2,<duty_nguong>                     - in lap lai moi 3 giay
+//
+// Ba nhom cot chan doan them (de tra loi vi sao ty le v_cam/v_enc co nac tut):
+//   dtheta  - robot xoay bao nhieu do trong nac do. Xoay nhieu -> quy dao la
+//             cung cong, ma d_cam chi do khoang cach THANG dau-cuoi, nen ty le
+//             tut xuong du banh khong he truot. Bai do nay ghi thang PWM nen
+//             vong giu huong bang gyro KHONG hoat dong, robot xoay tu do.
+//   x,y     - robot dang o dau. Neu cac nac xau tap trung o mot vung toa do
+//             thi nguyen nhan la mat san cho do hoac mep vung camera quet.
+//   dFL..RR - delta encoder tung banh. Banh nao gan 0 trong khi 3 banh kia
+//             quay deu thi chinh banh do dang ket va lam robot xoay.
 
 void pwm_test2_run(void);
+
+// ---------------------------------------------------------------------------
+// Kiem tra quy uoc DAU cua theta camera - khong chay dong co, chi doc.
+// ---------------------------------------------------------------------------
+// In song song theta camera va yaw gyro, KHONG cho ben nao ghi de ben nao,
+// roi nguoi dung xoay robot bang tay. Gyro lam chuan doi chieu vi quy uoc cua
+// no da duoc xac lap tu lau. Ham tu in ket luan khi da xoay qua 30 do.
+//
+// Dinh dang log:
+//   THCHK,<valid>,<th_cam>,<yaw_gyro>,<d_cam>,<d_gyro>
+//   THCHK:KET LUAN = CUNG CHIEU / NGUOC CHIEU
+//
+// Goi SAU khi da hieu chuan IMU trong main.c. Ham khong bao gio return.
+void pose_theta_check_run(uint8_t imu_ready);
+
+// ---------------------------------------------------------------------------
+// Bai chay thang - kiem chung K_FF, vong giu huong, va do tre camera
+// ---------------------------------------------------------------------------
+// Di qua dung duong van hanh that (odometry -> ghi de pose -> vong giu huong
+// -> robot_set_velocity), khong ghi thang PWM. Ramp len toc do dat, giu vai
+// giay, roi CAT LENH dot ngot va theo doi tiep de do do tre camera.
+//
+// Dinh dang log:
+//   ST,<t_ms>,<v_cmd>,<x_mm>,<y_mm>,<th_cam>,<yaw>,<th_err>,<d_enc_mm>,<d_cam_mm>
+//   STSUM,... - tong ket, in lap lai moi 3 giay
+//
+// Doc ket qua:
+//   ty_le          = v_thuc / v_dat. Lech nhieu -> nhan K_FF voi chinh ty le do.
+//   th_err_max     = vong giu huong co lam viec khi dang chay khong.
+//   t_banh_dung vs t_cam_thay_dung: hieu hai moc nay la do tre duong truyen pose.
+//
+// Goi SAU khi hieu chuan IMU. Ham khong bao gio return.
+void straight_test_run(uint8_t imu_ready);
 
 #endif

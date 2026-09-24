@@ -3,11 +3,29 @@
 #include "stm32f4xx.h"
 #include <math.h>
 
-static uint32_t speed_to_duty(float speed_rad_s)
+// duty = OFFSET[banh] + K_FF*|w|  - xem giai thich trong config.h.
+// Moi banh mot offset rieng vi nguong khoi dong cua 4 dong co lech nhau toi
+// 39% (90..125). Bu rieng tung banh dua lech trai/phai tu 13.4% xuong 1.6%
+// va do xoay tren moi met tu 35 do xuong 16 do (do thuc te 24/09/2026).
+static const float DUTY_OFFSET[4] = {
+    MOTOR_DUTY_OFFSET_FL,
+    MOTOR_DUTY_OFFSET_FR,
+    MOTOR_DUTY_OFFSET_RL,
+    MOTOR_DUTY_OFFSET_RR
+};
+
+static uint32_t speed_to_duty(motor_id_t wheel, float speed_rad_s)
 {
-    uint32_t duty = (uint32_t)(K_FF * fabsf(speed_rad_s) + 0.5f);
-    if (duty > PWM_MAX - 1) duty = PWM_MAX - 1;
-    return duty;
+    float w = fabsf(speed_rad_s);
+
+    if (w < 1e-3f) return 0;   // lenh dung han -> cat PWM, khong de offset lam u dong co
+
+    float duty = DUTY_OFFSET[wheel] + K_FF * w;
+
+    if (duty > (float)(PWM_MAX - 1)) duty = (float)(PWM_MAX - 1);
+    if (duty < 0.0f)                 duty = 0.0f;
+
+    return (uint32_t)(duty + 0.5f);
 }
 
 static void pwm_pins_init(void)
@@ -54,28 +72,28 @@ void motor_set_FL(float speed_rad_s)
 {
     if (speed_rad_s >= 0) { GPIOB->BSRR = (1u<<0);      GPIOA->BSRR = (1u<<(4+16)); }
     else                  { GPIOB->BSRR = (1u<<16);     GPIOA->BSRR = (1u<<4);      }
-    TIM1->CCR1 = speed_to_duty(speed_rad_s);
+    TIM1->CCR1 = speed_to_duty(MOTOR_FL, speed_rad_s);
 }
 
 void motor_set_FR(float speed_rad_s)
 {
     if (speed_rad_s >= 0) { GPIOC->BSRR = (1u<<0);      GPIOC->BSRR = (1u<<(1+16)); }
     else                  { GPIOC->BSRR = (1u<<16);     GPIOC->BSRR = (1u<<1);      }
-    TIM1->CCR2 = speed_to_duty(speed_rad_s);
+    TIM1->CCR2 = speed_to_duty(MOTOR_FR, speed_rad_s);
 }
 
 void motor_set_RL(float speed_rad_s)
 {
     if (speed_rad_s >= 0) { GPIOC->BSRR = (1u<<(4+16)); GPIOC->BSRR = (1u<<5);      }
     else                  { GPIOC->BSRR = (1u<<4);      GPIOC->BSRR = (1u<<(5+16)); }
-    TIM1->CCR3 = speed_to_duty(speed_rad_s);
+    TIM1->CCR3 = speed_to_duty(MOTOR_RL, speed_rad_s);
 }
 
 void motor_set_RR(float speed_rad_s)
 {
     if (speed_rad_s >= 0) { GPIOC->BSRR = (1u<<2);      GPIOC->BSRR = (1u<<(3+16)); }
     else                  { GPIOC->BSRR = (1u<<(2+16)); GPIOC->BSRR = (1u<<3);      }
-    TIM1->CCR4 = speed_to_duty(speed_rad_s);
+    TIM1->CCR4 = speed_to_duty(MOTOR_RR, speed_rad_s);
 }
 
 void motor_set_all(float w_FL, float w_FR, float w_RL, float w_RR)
