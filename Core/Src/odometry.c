@@ -34,6 +34,10 @@ void odometry_update(const int32_t dcnt[4], float dt_s)
     float vx_body, vy_body, wz_unused;
     forward_kinematics(w_FL, w_FR, w_RL, w_RR, &vx_body, &vy_body, &wz_unused);
 
+    // Buoc 2b: bu truot banh - banh quay du nhung xe di duoc it hon
+    vx_body *= K_SLIP_X;
+    vy_body *= K_SLIP_Y;
+
     // Buoc 3: goc theta hien tai - lay thang tu IMU, KHONG tich phan lai o day
     float theta_rad = mpu6050_get_yaw_deg() * PI / 180.0f;
 

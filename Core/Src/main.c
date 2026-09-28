@@ -9,6 +9,7 @@
 #include "mpu6050.h"
 #include "pose_link.h"
 #include "pwm_test.h"
+#include "goto_test.h"
 #include <math.h>
 #include <stdio.h>
 #include "robot_control.h"
@@ -64,6 +65,10 @@ int main(void)
 #if STRAIGHT_TEST_ENABLE
     // Chay thang qua dung duong van hanh that - CAN khoang trong phia truoc.
     straight_test_run(imu_ready);
+#endif
+
+#if GOTO_TEST_ENABLE
+    goto_test_run(imu_ready);
 #endif
 
     usart6_send_string("STM32:RUNNING\r\n");

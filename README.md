@@ -39,6 +39,7 @@ STM32F401RETX_*.ld       — linker script (Flash / RAM)
 | `pose_link.h/c` | Parse dòng lệnh nhận được từ gateway, giữ pose mới nhất + watchdog + bộ đếm gói theo từng loại |
 | `usart6.h/c` | TX: telemetry 115200 baud. RX: ngắt RXNE gom dòng vào **hàng đợi vòng 8 dòng** (PC7) |
 | `pwm_test.h/c` | 4 bài đo/kiểm tra độc lập, mỗi bài chiếm toàn quyền lúc boot rồi treo lại (không rơi xuống vòng điều khiển bình thường) — xem [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn) |
+| `goto_test.h/c` | Bài chạy tới **1 điểm đích cố định** bằng đúng đường vận hành thật (feed-forward + vòng giữ hướng + odometry), cũng chiếm toàn quyền lúc boot rồi treo lại — xem mục 5 trong [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn) |
 | `robot_control.h/c` | API cấp cao duy nhất: `robot_set_velocity(vx, vy, wz)` → tự IK + xuất PWM 4 bánh |
 | `main.c` | Boot → hiệu chuẩn IMU → vòng lặp 50 Hz: đọc pose + encoder + IMU → odometry → ghi đè pose khi có khung hình mới → vòng P-controller giữ hướng → `robot_set_velocity()` → log telemetry |
 
@@ -69,7 +70,7 @@ vy = (R/4)·(−ωFL + ωFR + ωRL − ωRR)
 
 ## Vòng lặp điều khiển chính
 
-> Chỉ chạy tới đây khi cả 4 cờ bài đo (`PWM_TEST_ENABLE`, `PWM_TEST2_ENABLE`, `POSE_CHECK_ENABLE`, `STRAIGHT_TEST_ENABLE`) đều = 0 trong `config.h` — xem cảnh báo ở mục [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn) về trạng thái hiện tại.
+> Chỉ chạy tới đây khi cả 5 cờ bài đo (`PWM_TEST_ENABLE`, `PWM_TEST2_ENABLE`, `POSE_CHECK_ENABLE`, `STRAIGHT_TEST_ENABLE`, `GOTO_TEST_ENABLE`) đều = 0 trong `config.h` — xem cảnh báo ở mục [Các bài đo & kiểm tra hiệu chuẩn](#các-bài-đo--kiểm-tra-hiệu-chuẩn) về trạng thái hiện tại.
 
 1. `pose_link_poll()` — vét hàng đợi các dòng đã về qua ngắt UART6 RX.
 2. Đọc delta-encoder 4 bánh + cập nhật IMU → `odometry_update()`.
@@ -106,7 +107,7 @@ Tham số phía STM32 trong `config.h`: `POSE_LINK_ENABLE`, `POSE_LINK_TIMEOUT_M
 
 ## Các bài đo & kiểm tra hiệu chuẩn
 
-`pwm_test.c` gom 4 bài đo/kiểm tra độc lập, mỗi bài bật bằng 1 cờ riêng trong `config.h` (`PWM_TEST_ENABLE`, `PWM_TEST2_ENABLE`, `POSE_CHECK_ENABLE`, `STRAIGHT_TEST_ENABLE`) — **chỉ nên bật 1 cờ tại một thời điểm**. Cả 4 đều chạy **một lần lúc boot rồi treo lại** in kết quả lặp định kỳ, **không bao giờ** rơi xuống vòng điều khiển bình thường.
+`pwm_test.c` + `goto_test.c` gom 5 bài đo/kiểm tra độc lập, mỗi bài bật bằng 1 cờ riêng trong `config.h` (`PWM_TEST_ENABLE`, `PWM_TEST2_ENABLE`, `POSE_CHECK_ENABLE`, `STRAIGHT_TEST_ENABLE`, `GOTO_TEST_ENABLE`) — **chỉ nên bật 1 cờ tại một thời điểm**. Cả 5 đều chạy **một lần lúc boot rồi treo lại** in kết quả lặp định kỳ, **không bao giờ** rơi xuống vòng điều khiển bình thường.
 
 **1. Pha 1 — ngưỡng PWM không tải** (`pwm_test_run`, `PWM_TEST_ENABLE`): bánh kê lên khỏi mặt sàn, tăng dần duty từng bánh một, dùng encoder làm trọng tài. Chỉ dùng để so sánh 4 động cơ với nhau (bánh lệch hẳn = hộp số kẹt/dây lỏng/driver yếu), **không** dùng số đo được làm `V_MIN` vì thiếu ma sát sàn và quán tính robot thật. Log: `PWMT,<bánh>,<duty>,<số_xung>,<rad/s>`, `PWMTH,<bánh>,<duty_ngưỡng>`, `PWMSUM,<FL>,<FR>,<RL>,<RR>`.
 
@@ -120,7 +121,9 @@ Tham số phía STM32 trong `config.h`: `POSE_LINK_ENABLE`, `POSE_LINK_TIMEOUT_M
 
 **4. Chạy thẳng — kiểm chứng K_FF, vòng giữ hướng, độ trễ camera** (`straight_test_run`, `STRAIGHT_TEST_ENABLE`): đi qua đúng đường vận hành thật (odometry → ghi đè pose → vòng giữ hướng → `robot_set_velocity()`, không ghi thẳng PWM như 2 bài trên), tăng tốc dần lên `ST_TARGET_V` (0.15 m/s, trên `ROBOT_V_MIN`), giữ vài giây, rồi cắt lệnh đột ngột và tiếp tục theo dõi để đo độ trễ camera. Cần gateway + camera đang chạy và >1.5m khoảng trống phía trước. Log: `ST,<t_ms>,<v_cmd>,<x_mm>,<y_mm>,<th_cam>,<yaw>,<th_err>,<d_enc_mm>,<d_cam_mm>`, `STSUM,...`.
 
-> **Cấu hình hiện tại trong `config.h`: `STRAIGHT_TEST_ENABLE = 1`, 3 cờ còn lại = 0** — nạp firmware như đang có trong repo sẽ chạy **bài chạy thẳng** (mục 4), không phải vòng điều khiển bình thường. Đặt cả 4 cờ về 0 rồi nạp lại khi muốn quay về vòng điều khiển bình thường (đứng yên + tự giữ hướng).
+**5. Chạy tới 1 điểm — go-to-point đường thẳng** (`goto_test_run`, `GOTO_TEST_ENABLE`): robot đặt tại gốc `(0;0)`, đầu xe theo trục X, chạy thẳng tới đích `(GTP_GOAL_X_M; GTP_GOAL_Y_M)` bằng đúng đường vận hành thật (odometry → ghi đè pose → vòng giữ hướng → `robot_set_velocity()`, không ghi thẳng PWM). Điểm xuất phát lấy trung bình pose camera trong `GTP_START_AVG_MS` lúc đứng yên rồi snap odometry/yaw về đó. `GTP_USE_CAMERA`: bật = camera ghi đè pose mỗi khung hình như vòng chính (có độ trễ camera); tắt = **chỉ odometry** (encoder + gyro) điều khiển, camera chỉ làm trọng tài chấm sai số thật — dùng để đo riêng sai số dead-reckoning. Tốc độ tỉ lệ theo khoảng cách còn lại (`GTP_KP_POS`, trần `GTP_V_MAX`, ramp `GTP_RAMP_MS`), cộng thêm **sàn tốc độ theo hướng đi** `v_floor_for()`: đi chéo thì một cặp bánh đối xứng quay chậm hơn hẳn cặp kia (đi chéo 18.4° làm cặp bánh chậm chỉ còn quay bằng nửa cặp kia), nên không dùng chung `ROBOT_V_MIN` như đi thẳng mà phải tính sàn riêng theo từng hướng để không bánh nào rơi dưới `MOTOR_OMEGA_MIN` rồi đứng khựng. Dừng khi vào bán kính `GTP_TOL_M` hoặc hết `GTP_TIMEOUT_MS`, chờ thêm `GTP_SETTLE_MS` cho robot trôi hết quán tính rồi in tổng kết liên tục. Log: `GTP,t_ms,v_cmd,x_odo,y_odo,yaw,cam_ok,x_cam,y_cam,th_cam,cross_odo,cross_cam,dist_odo` (đơn vị mm/độ, `cross` dương = lệch trái đường thẳng lý tưởng) mỗi `GTP_LOG_EVERY_MS`; `GTPSUM,...` (mỗi 3s) gồm kết quả tới đích hay hết giờ, sai số thật so với đích theo camera, độ trôi odometry so với camera, và cross-track/heading-error lớn nhất cả hành trình.
+
+> **Cấu hình hiện tại trong `config.h`: `GOTO_TEST_ENABLE = 1`, 4 cờ còn lại = 0** — nạp firmware như đang có trong repo sẽ chạy **bài chạy tới điểm** (mục 5), đích `(1.80; 0.60)` m, `GTP_USE_CAMERA = 0` (điều khiển hoàn toàn bằng odometry, camera chỉ chấm điểm), không phải vòng điều khiển bình thường. Đặt cả 5 cờ về 0 rồi nạp lại khi muốn quay về vòng điều khiển bình thường (đứng yên + tự giữ hướng).
 
 ## Cách test khi chưa có camera
 
@@ -136,12 +139,13 @@ Tham số phía STM32 trong `config.h`: `POSE_LINK_ENABLE`, `POSE_LINK_TIMEOUT_M
 
 ## Trạng thái & hướng phát triển tiếp theo
 
-Đã xong: driver PWM/encoder/IMU/UART (TX + RX có hàng đợi), động học IK/FK, odometry fusion, vòng giữ hướng bằng gyro, kênh nhận vị trí tuyệt đối từ camera trần qua gateway ESP-NOW, bộ 4 bài đo/kiểm tra hiệu chuẩn (`pwm_test.c`), hiệu chuẩn `K_FF=23.3` + offset PWM riêng từng bánh đã đưa vào `motor.c` (từ dữ liệu đo thật 23–24/09/2026), và đối chiếu xác nhận quy ước dấu θ giữa camera và gyro (cùng chiều, đúng).
+Đã xong: driver PWM/encoder/IMU/UART (TX + RX có hàng đợi), động học IK/FK, odometry fusion, vòng giữ hướng bằng gyro, kênh nhận vị trí tuyệt đối từ camera trần qua gateway ESP-NOW, bộ 5 bài đo/kiểm tra hiệu chuẩn (`pwm_test.c` + `goto_test.c`), hiệu chuẩn `K_FF=23.3` + offset PWM riêng từng bánh đã đưa vào `motor.c` (từ dữ liệu đo thật 23–24/09/2026), đối chiếu xác nhận quy ước dấu θ giữa camera và gyro (cùng chiều, đúng), và bài **go-to-point đầu tiên** (`goto_test.c`) chạy thẳng tới 1 điểm cố định trên đúng đường vận hành thật, có sàn tốc độ tối thiểu tính riêng theo hướng đi chéo (`v_floor_for()`) thay vì dùng chung `ROBOT_V_MIN`.
 
-Đang thiếu / dự kiến làm tiếp:
-- Đọc kết quả bài chạy thẳng (`straight_test_run`, đang bật) để xác nhận `K_FF`/offset mới đã đủ chính xác, hoặc hiệu chỉnh thêm.
-- Đưa `ROBOT_V_MIN`/`MOTOR_OMEGA_MIN` vào vòng go-to-point khi viết (hiện mới là hằng số ghi lại cận trên, chưa có chỗ nào enforce).
+Đang thiếu / dự kiến làm tiếp (theo đúng lộ trình "đi từ điểm A tới điểm B, có hầm trên đường" đang bám):
+- Đọc kết quả bài go-to-point hiện tại (`GOTO_TEST_ENABLE=1`, đích `(1.80; 0.60)` m, `GTP_USE_CAMERA=0`) — đường đi thẳng hay cong, sai số dừng so với đích thật, độ trôi odometry so với camera — trước khi thử bật `GTP_USE_CAMERA=1` hoặc đổi điểm đích khác.
+- Bài toán "hầm": khi marker bị che giữa đường, hiện `pose_link` chỉ có watchdog timeout cứng (`POSE_LINK_TIMEOUT_MS`) chứ chưa có xử lý riêng cho go-to-point — cần cho phép trôi tiếp bằng odometry thay vì dừng ngay khi mất camera.
+- Cân nhắc Kalman filter — giá trị chính là ước lượng bias gyro, không phải độ chính xác theta (theta camera/gyro đã khớp tốt).
+- Mở rộng go-to-point cho nhiều điểm liên tiếp: xử lý `WPLIST`/`WPCLR` thay vì 1 điểm cố định hard-code trong `config.h`.
 - Xử lý `START`/`STOP`: cờ cho phép chạy trong vòng điều khiển.
-- Xử lý `WPLIST`/`WPCLR` + vòng go-to-point bám lần lượt từng điểm đích, kèm điều kiện dừng khi mất pose.
 - Vòng phản hồi tốc độ (PID) theo encoder cho từng bánh — hiện chỉ là feed-forward + offset tĩnh.
 - Đồng bộ lại `FWMR_run_test.ioc` với cấu hình phần cứng thực tế.

@@ -7,6 +7,15 @@
 #define WHEEL_R  0.034f
 #define K_GEOM   0.17125f
 
+// Ty le quang duong THAT / quang duong encoder dem, theo tung truc than xe.
+// Chi dung trong odometry.c: odometry biet dung vi tri that thi vong
+// go-to-point tu ra lenh bu phan truot, khong can sua IK.
+// Uoc luong tu bai chay cheo toi (180;60) ngay 28/09/2026 (camera lam trong
+// tai): truc x dat 97%, truc y chi dat 75% (con lan mecanum truot khi di
+// ngang). Chinh lai bang 2 bai rieng: dich (1.80;0) va (0;0.60).
+#define K_SLIP_X 0.97f
+#define K_SLIP_Y 0.75f
+
 // ---------------------------------------------------------------------------
 // Quy doi toc do goc banh (rad/s) -> duty PWM.   duty = OFFSET[banh] + K_FF*|w|
 // ---------------------------------------------------------------------------
@@ -123,7 +132,7 @@
 
 // --- Bai chay thang: kiem chung K_FF, vong giu huong, do tre camera ---
 // CAN gateway + camera dang chay, va khoang trong >1.5m phia truoc dau xe.
-#define STRAIGHT_TEST_ENABLE    1
+#define STRAIGHT_TEST_ENABLE    0
 
 #define ST_TARGET_V             0.15f   // m/s - tren V_MIN (0.102) mot khoang an toan
 #define ST_RAMP_MS              500u    // tang toc dan, tranh truot banh luc khoi hanh
@@ -167,5 +176,51 @@
 
 #define PWM_TEST2_CONFIRM_STEPS 3
 #define PWM_TEST2_EXTRA_STEPS   12
+
+// ---------------------------------------------------------------------------
+// Bai chay toi diem (goto_test.c) - robot dat tai (0;0), dau xe theo truc X
+// ---------------------------------------------------------------------------
+// Muc dich: voi nhung gi dang co (feedforward + vong giu huong + odometry),
+// robot co toi dung dich khong, va duong di thang hay cong.
+#define GOTO_TEST_ENABLE        1
+
+#define GTP_GOAL_X_M            1.80f
+#define GTP_GOAL_Y_M            0.60f
+#define GTP_HEADING_DEG         0.0f    // giu dau xe theo truc X suot hanh trinh
+
+// 0 = CHI odometry (encoder + gyro) dieu khien, camera chi lam TRONG TAI
+//     -> do duoc sai so dead-reckoning that su.
+// 1 = camera ghi de pose moi khung hinh nhu vong chinh (co tre camera).
+#define GTP_USE_CAMERA          0
+
+#define GTP_V_MAX               0.22f   // m/s
+#define GTP_KP_POS              0.8f    // (m/s)/m - giam toc khi con < ~27 cm
+// Toc do san = GTP_WHEEL_MARGIN * MOTOR_OMEGA_MIN o banh CHAM NHAT.
+// Di cheo 18.4 do thi FL/RR chi quay bang 1/2 FR/RL: o 0.15 m/s FL/RR = 2.79
+// rad/s < 2.97 -> dung im. Nen toc do san phai tinh theo huong di, khong
+// dung ROBOT_V_MIN (chi dung cho di thang).
+#define GTP_WHEEL_MARGIN        1.2f
+#define GTP_RAMP_MS             400u
+#define GTP_TOL_M               0.015f  // coi la toi dich (theo odometry)
+#define GTP_TIMEOUT_MS          20000u
+#define GTP_SETTLE_MS           3000u   // dung roi cho them: camera tre ~1.5s
+#define GTP_CAM_WAIT_MS         3000u   // cho pose camera luc bat dau
+#define GTP_START_AVG_MS        3000u   // camera ~3 khung/s -> 3s moi du ~9 khung
+#define GTP_LOG_EVERY_MS        100u
+
+// Watchdog encoder: banh dang duoc lenh quay >= MIN_W rad/s ma so xung do
+// duoc < RATIO * so xung le ra phai co, lien tuc WD_MS -> dung khan, bao
+// ENC_FAIL_<banh>. Bat ca 2 truong hop: day encoder long (dong co van quay)
+// va banh ket that (dong co khong quay). MIN_W = 3.0 ngay tren nguong khoi
+// dong 2.97 de ca cap banh cham khi di cheo cung duoc kiem.
+#define GTP_ENC_WD_MIN_W        3.0f    // rad/s
+#define GTP_ENC_WD_RATIO        0.2f
+#define GTP_ENC_WD_MS           300u
+
+// Phanh an toan bang camera (chi hoat dong khi co camera luc xuat phat):
+// dung khan neu camera thay robot da qua dich hon OVERSHOOT theo huong di,
+// hoac lech ngang khoi duong thang hon CROSS_MAX.
+#define GTP_CAM_OVERSHOOT_M     0.20f
+#define GTP_CAM_CROSS_MAX_M     0.30f
 
 #endif
