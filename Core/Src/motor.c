@@ -3,10 +3,8 @@
 #include "stm32f4xx.h"
 #include <math.h>
 
-// duty = OFFSET[banh] + K_FF*|w|  - xem giai thich trong config.h.
-// Moi banh mot offset rieng vi nguong khoi dong cua 4 dong co lech nhau toi
-// 39% (90..125). Bu rieng tung banh dua lech trai/phai tu 13.4% xuong 1.6%
-// va do xoay tren moi met tu 35 do xuong 16 do (do thuc te 24/09/2026).
+// duty = OFFSET[banh] + K_FF*|w| - moi banh mot offset rieng vi nguong
+// khoi dong cua 4 dong co lech nhau (xem config.h).
 static const float DUTY_OFFSET[4] = {
     MOTOR_DUTY_OFFSET_FL,
     MOTOR_DUTY_OFFSET_FR,
@@ -102,4 +100,30 @@ void motor_set_all(float w_FL, float w_FR, float w_RL, float w_RR)
     motor_set_FR(w_FR);
     motor_set_RL(w_RL);
     motor_set_RR(w_RR);
+}
+
+static uint32_t clamp_duty(int32_t d)
+{
+    if (d < 0) d = -d;
+    if (d > (int32_t)(PWM_MAX - 1)) d = (int32_t)(PWM_MAX - 1);
+    return (uint32_t)d;
+}
+
+void motor_set_duty_raw(int32_t d_FL, int32_t d_FR, int32_t d_RL, int32_t d_RR)
+{
+    if (d_FL >= 0) { GPIOB->BSRR = (1u<<0);      GPIOA->BSRR = (1u<<(4+16)); }
+    else           { GPIOB->BSRR = (1u<<16);     GPIOA->BSRR = (1u<<4);      }
+    TIM1->CCR1 = clamp_duty(d_FL);
+
+    if (d_FR >= 0) { GPIOC->BSRR = (1u<<0);      GPIOC->BSRR = (1u<<(1+16)); }
+    else           { GPIOC->BSRR = (1u<<16);     GPIOC->BSRR = (1u<<1);      }
+    TIM1->CCR2 = clamp_duty(d_FR);
+
+    if (d_RL >= 0) { GPIOC->BSRR = (1u<<(4+16)); GPIOC->BSRR = (1u<<5);      }
+    else           { GPIOC->BSRR = (1u<<4);      GPIOC->BSRR = (1u<<(5+16)); }
+    TIM1->CCR3 = clamp_duty(d_RL);
+
+    if (d_RR >= 0) { GPIOC->BSRR = (1u<<2);      GPIOC->BSRR = (1u<<(3+16)); }
+    else           { GPIOC->BSRR = (1u<<(2+16)); GPIOC->BSRR = (1u<<3);      }
+    TIM1->CCR4 = clamp_duty(d_RR);
 }

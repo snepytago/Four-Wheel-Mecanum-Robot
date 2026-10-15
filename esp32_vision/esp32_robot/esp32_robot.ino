@@ -7,15 +7,17 @@
  *       đẩy nguyên văn xuống STM32. Cố ý giữ "câm" — không parse, không
  *       đổi đơn vị. Mọi việc hiểu nội dung do pose_link.c phía STM32 làm.
  *
- *   LÊN (UART -> USB Serial): đọc telemetry STM32 gửi ra PC6 rồi in lên
- *       Serial Monitor, để xem log của STM32 mà không cần USB-TTL riêng.
- *       Dòng STM32 được đánh dấu "[STM]" để phân biệt với "[R29]".
+ *   LÊN (UART -> USB Serial + ESP-NOW): đọc telemetry STM32 gửi ra PC6,
+ *       in lên Serial Monitor của board này VÀ gửi không dây sang
+ *       esp32Server (MAC 94:E6:86:3A:C3:88, cắm USB vào PC, chạy
+ *       esp32_vision/esp32_server_log). Dòng STM32 được đánh dấu "[STM]".
  *
  * Chuỗi đường truyền:
  *   PC (Python) --Serial--> esp32C (gateway, đã có sẵn)
  *        gateway cắt "<ID>;" ở đầu, gửi phần còn lại tới MAC robot ID 29
  *   --ESP-NOW--> esp32R (file này) --UART 115200--> STM32 PC7 (USART6_RX)
  *   STM32 PC6 (USART6_TX) --UART--> esp32R --USB--> Serial Monitor
+ *                                          --ESP-NOW--> esp32Server --USB--> PC
  *
  * Các payload nhận được từ gateway (nguyên văn, KÈM dấu '#' cuối):
  *   510.0;60.0;3.14159#                 pose: x_cm ; y_cm ; theta_rad
@@ -46,6 +48,10 @@
 #define STM32_UART_BAUD       115200
 
 #define RX_TIMEOUT_MS         500    // quá lâu không có gói -> báo MAT
+
+// --- Gửi log STM32 không dây sang esp32Server ---
+#define FORWARD_TO_SERVER     1      // 0 = chỉ in qua USB như trước
+static uint8_t SERVER_MAC[6] = {0x94, 0xE6, 0x86, 0x3A, 0xC3, 0x88};
 
 // --- Hiển thị log của STM32 trên Serial Monitor ---
 // STM32 gửi ~100 dòng/giây (IMU 50Hz + POSE 50Hz + PLINK 5Hz). In hết sẽ
@@ -81,6 +87,8 @@ static uint32_t g_fwd_count = 0;
 static char     stm_line[STM_LINE_MAX];
 static uint16_t stm_len = 0;
 static uint32_t g_stm_lines = 0;     // tổng số dòng đọc được từ STM32
+static uint32_t g_srv_sent  = 0;     // số dòng đã gửi sang esp32Server
+static uint32_t g_srv_fail  = 0;     // esp_now_send báo lỗi (hàng đợi đầy...)
 static uint16_t g_pose_div  = 0;
 
 // Chỉ nhận ASCII in được: gói ESP-NOW không có checksum nên đây là lớp lọc
@@ -104,6 +112,32 @@ static bool starts_with(const char *s, const char *prefix)
     return true;
 }
 
+// Gửi 1 dòng sang esp32Server. Nếu hàng đợi ESP-NOW tạm đầy (khối KET QUA
+// của STM32 về thành cụm ~12 dòng liền nhau) thì chờ chút rồi thử lại.
+static void send_to_server(const char *s)
+{
+#if FORWARD_TO_SERVER
+    size_t len = strlen(s);
+    if (len > PAYLOAD_MAX) len = PAYLOAD_MAX;
+
+    for (int attempt = 0; attempt < 5; attempt++) {
+        esp_err_t r = esp_now_send(SERVER_MAC, (const uint8_t *)s, len);
+        if (r == ESP_OK) { g_srv_sent++; return; }
+        if (r != ESP_ERR_ESPNOW_NO_MEM) break;
+        delay(2);
+    }
+    g_srv_fail++;
+#else
+    (void)s;
+#endif
+}
+
+static void show_line(const char *s)
+{
+    Serial.printf("[STM] %s\n", s);
+    send_to_server(s);
+}
+
 static void handle_stm32_line(const char *s)
 {
     g_stm_lines++;
@@ -111,7 +145,7 @@ static void handle_stm32_line(const char *s)
 #if FORWARD_STM32_LOG
     if (starts_with(s, "IMU,")) {
     #if LOG_SHOW_IMU
-        Serial.printf("[STM] %s\n", s);
+        show_line(s);
     #endif
         return;
     }
@@ -119,12 +153,12 @@ static void handle_stm32_line(const char *s)
     if (starts_with(s, "POSE,")) {
         if (++g_pose_div < LOG_POSE_EVERY_N) return;
         g_pose_div = 0;
-        Serial.printf("[STM] %s\n", s);
+        show_line(s);
         return;
     }
 
-    // PLINK, STM32:BOOT, STM32:READY, STM32:RUNNING... - in đủ
-    Serial.printf("[STM] %s\n", s);
+    // PLINK, ENC, KET QUA, STM32:BOOT, STM32:RUNNING... - in đủ
+    show_line(s);
 #endif
 }
 
@@ -203,6 +237,16 @@ void setup()
 
     esp_now_register_recv_cb(onDataRecv);
 
+#if FORWARD_TO_SERVER
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, SERVER_MAC, 6);
+    peer.channel = ESPNOW_CHANNEL;
+    peer.encrypt = false;
+    if (esp_now_add_peer(&peer) != ESP_OK) {
+        Serial.println(">>> LOI THEM PEER esp32Server");
+    }
+#endif
+
     Serial.println();
     Serial.println("====================================");
     Serial.println("esp32R - ROBOT 29 (cau ESP-NOW <-> STM32)");
@@ -242,12 +286,15 @@ void loop()
 
         // stm = so dong doc duoc tu STM32. Bang 0 => day PC6 -> GPIO16 chua
         // thong hoac STM32 chua chay.
-        Serial.printf("[R29] link=%s rx=%lu fwd=%lu bad=%lu drop=%lu stm=%lu\n",
+        // srv = so dong da gui sang esp32Server, srv_fail = gui loi
+        Serial.printf("[R29] link=%s rx=%lu fwd=%lu bad=%lu drop=%lu stm=%lu srv=%lu srv_fail=%lu\n",
                       timed_out ? "MAT" : "OK",
                       (unsigned long)g_rx_count,
                       (unsigned long)g_fwd_count,
                       (unsigned long)g_rx_bad,
                       (unsigned long)g_dropped,
-                      (unsigned long)g_stm_lines);
+                      (unsigned long)g_stm_lines,
+                      (unsigned long)g_srv_sent,
+                      (unsigned long)g_srv_fail);
     }
 }

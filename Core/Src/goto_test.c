@@ -1,9 +1,9 @@
 #include "goto_test.h"
 #include "config.h"
+#include "ekf.h"
 #include "encoder.h"
 #include "kinematics.h"
 #include "mpu6050.h"
-#include "odometry.h"
 #include "pose_link.h"
 #include "robot_control.h"
 #include "usart6.h"
@@ -11,324 +11,389 @@
 #include <math.h>
 
 #define DEG2RAD  0.017453293f
+#define RAD2DEG  57.29577951f
 
-enum { ST_RUN = 0, ST_TOI_DICH, ST_HET_GIO, ST_ENC_FAIL, ST_CAM_VUOT, ST_CAM_LECH };
+enum { ST_SETTLE = 0, ST_ROTATE, ST_DRIVE, ST_WAIT_CAM, ST_DONE };
+enum { KQ_DAT = 0, KQ_CHUA_DAT, KQ_HET_GIO, KQ_STOP };
 
-static const char *WNAME[4] = { "FL", "FR", "RL", "RR" };
+static const char *ST_NAME[] = { "DUNG", "XOAY", "CHAY", "CHO_CAM", "XONG" };
 
-static float wrap180(float a)
+static uint8_t  st;
+static uint8_t  moving;             // dang ra lenh chuyen dong (de nhan ra khung camera dong bang)
+static uint32_t cam_good_ms;        // lan cuoi nhan 1 khung camera hop le
+static float    cxp, cyp, cthp;     // khung camera truoc (so sanh dong bang)
+static float    gz_prev;
+
+// Trung binh camera luc dung yen (cho bang ket qua)
+static float    av_x, av_y, av_s, av_c;
+static uint32_t av_n;
+static uint8_t  av_on;              // chi cong don trong cua so cuoi cua pha dung yen
+
+static float wrap_pi(float a)
 {
-    while (a >  180.0f) a -= 360.0f;
-    while (a < -180.0f) a += 360.0f;
+    while (a >  PI) a -= TWO_PI;
+    while (a < -PI) a += TWO_PI;
     return a;
 }
 
-static void send_mm(float m) { usart6_send_int((int32_t)(m * 1000.0f)); }
+static void send_mm(float m)   { usart6_send_int((int32_t)lroundf(m * 1000.0f)); }
+static void send_deg(float r)  { usart6_send_float(r * RAD2DEG, 1); }
 
-// Toc do robot nho nhat de banh CHAM NHAT van vuot nguong khoi dong, voi
-// huong di (ux_b, uy_b) trong he than xe. Theo IK: |w| banh = |vx -+ vy| / r.
-static float v_floor_for(float ux_b, float uy_b)
+static void stop_motors(void)  { robot_set_velocity(0.0f, 0.0f, 0.0f); }
+
+// Toc do nho nhat de cap banh dang chay vuot nguong khoi dong, voi huong
+// (a, b) trong he than xe (da chia K_SLIP). Theo IK: |w| = |vx -+ vy| / r.
+static float v_floor_for(float a, float b)
 {
-    float a = fabsf(ux_b - uy_b);   // FL, RR
-    float b = fabsf(ux_b + uy_b);   // FR, RL
-    float k = ((a < b) ? a : b) / WHEEL_R;
-    if (k < 1e-3f) return GTP_V_MAX;
-    float v = GTP_WHEEL_MARGIN * MOTOR_OMEGA_MIN / k;
-    return (v > GTP_V_MAX) ? GTP_V_MAX : v;
+    float p = fabsf(a - b);   // FL, RR
+    float q = fabsf(a + b);   // FR, RL
+    float kmax = (p > q) ? p : q;
+    float kmin = (p < q) ? p : q;
+    float k = (kmin > 0.3f * kmax) ? kmin : kmax;   // cap gan bang 0 (chay cheo 45 do) thi bo qua
+    if (k < 1e-3f) return GOTO_V_MAX;
+    float v = GOTO_WHEEL_MARGIN * MOTOR_OMEGA_MIN * WHEEL_R / k;
+    return (v > GOTO_V_MAX) ? GOTO_V_MAX : v;
 }
 
-static int32_t iabs(int32_t v) { return (v < 0) ? -v : v; }
+// Doc cam bien + chay EKF. Goi dung 1 lan moi CONTROL_DT_MS.
+static void sense(float dt, uint32_t now)
+{
+    pose_link_poll();
+
+    int32_t d[4];
+    encoder_get_deltas(d);
+    const float k = TWO_PI / COUNTS_PER_REV;
+    float dxb, dyb, dwz;
+    forward_kinematics(d[MOTOR_FL] * k, d[MOTOR_FR] * k, d[MOTOR_RL] * k, d[MOTOR_RR] * k,
+                       &dxb, &dyb, &dwz);
+    dxb *= K_SLIP_X;
+    dyb *= K_SLIP_Y;
+
+    mpu6050_update(dt);
+    float gz = mpu6050_get_gyro_z_dps();
+    if (fabsf(gz) > GOTO_GZ_MAX_DPS) gz = gz_prev;   // gai nhieu / doc I2C loi
+    gz_prev = gz;
+
+    ekf_predict(dxb, dyb, gz * DEG2RAD, dt, now);
+
+    if (pose_link_take_fresh()) {
+        float xc = pose_link_get_x(), yc = pose_link_get_y();
+        float thc = pose_link_get_theta_deg() * DEG2RAD;
+        uint8_t same = (xc == cxp && yc == cyp && thc == cthp);
+        cxp = xc; cyp = yc; cthp = thc;
+
+        // Mat marker thi phia PC gui lai pose cu. Khi xe dang chay, 2 khung
+        // giong het nhau la khong the -> bo qua.
+        if (!(same && moving)) {
+            cam_good_ms = now;
+            ekf_update_cam(xc, yc, thc, now - EKF_CAM_DELAY_MS);
+            if (av_on) {
+                av_x += xc; av_y += yc; av_s += sinf(thc); av_c += cosf(thc); av_n++;
+            }
+        }
+    }
+}
+
+static void avg_reset(void) { av_x = av_y = av_s = av_c = 0.0f; av_n = 0; av_on = 0; }
+static void avg_start(void) { avg_reset(); av_on = 1; }
+
+static void go_state(uint8_t s, uint32_t t)
+{
+    st = s;
+    moving = (s == ST_ROTATE || s == ST_DRIVE);
+    if (!moving) stop_motors();
+    avg_reset();
+    usart6_send_string("GOTO:");
+    usart6_send_string(ST_NAME[s]);
+    usart6_send_string(" t_ms=");
+    usart6_send_int((int32_t)t);
+    usart6_send_string(" x=");  send_mm(ekf_x());
+    usart6_send_string(" y=");  send_mm(ekf_y());
+    usart6_send_string(" th="); send_deg(ekf_th());
+    usart6_send_string("\r\n");
+}
 
 void goto_test_run(uint8_t imu_ready)
 {
-    int32_t dcnt[4];
+    stop_motors();
 
-    robot_set_velocity(0.0f, 0.0f, 0.0f);
-
-    usart6_send_string("GTP:START dich=(");
-    send_mm(GTP_GOAL_X_M); usart6_send_char(';'); send_mm(GTP_GOAL_Y_M);
-    usart6_send_string(")mm che_do=");
-    usart6_send_string(GTP_USE_CAMERA ? "ODO+CAMERA\r\n" : "CHI_ODO (camera = trong tai)\r\n");
-    usart6_send_string("GTP:cho pose tu camera...\r\n");
-
-    uint32_t t_wait = HAL_GetTick();
-    while (!pose_link_valid() && (HAL_GetTick() - t_wait) < GTP_CAM_WAIT_MS) {
-        pose_link_poll();
+    if (!imu_ready) {
+        while (1) {
+            usart6_send_string("GOTO:LOI - khong thay MPU6050, khong chay\r\n");
+            HAL_Delay(2000);
+        }
     }
 
-    // --- Diem xuat phat: trung binh pose camera khi dung yen ---
-    float xs = 0.0f, ys = 0.0f, ths = 0.0f;
-    uint8_t cam_start = pose_link_valid();
+    const float gx = GOTO_GOAL_X_CM * 0.01f;
+    const float gy = GOTO_GOAL_Y_CM * 0.01f;
 
-    if (cam_start) {
-        float th_ref = pose_link_get_theta_deg();
-        float sx = 0.0f, sy = 0.0f, sth = 0.0f;
-        uint32_t n = 0;
-        uint32_t t0 = HAL_GetTick();
-        while ((HAL_GetTick() - t0) < GTP_START_AVG_MS) {
-            pose_link_poll();
-            if (pose_link_take_fresh()) {
-                sx  += pose_link_get_x();
-                sy  += pose_link_get_y();
-                sth += wrap180(pose_link_get_theta_deg() - th_ref);
-                n++;
-            }
-        }
-        if (n > 0) {
-            xs  = sx / (float)n;
-            ys  = sy / (float)n;
-            ths = th_ref + sth / (float)n;
-        } else {
-            xs  = pose_link_get_x();
-            ys  = pose_link_get_y();
-            ths = th_ref;
-        }
-        usart6_send_string("GTP:xuat_phat_cam=(");
-        send_mm(xs); usart6_send_char(';'); send_mm(ys);
-        usart6_send_string(")mm th=");
-        usart6_send_float(ths, 2);
-        usart6_send_string(" so_khung=");
-        usart6_send_int((int32_t)n);
-        usart6_send_string("\r\n");
-    } else {
-        usart6_send_string("GTP:KHONG CO CAMERA - coi xuat phat la (0;0;0), khong co trong tai, TAT phanh camera\r\n");
-    }
+    usart6_send_string("GOTO:DICH x=");  send_mm(gx);
+    usart6_send_string(" mm y=");        send_mm(gy);
+    usart6_send_string(" mm\r\n");
 
-    if (imu_ready) mpu6050_set_yaw_deg(ths);
-    encoder_get_deltas(dcnt);
-    odometry_set_pose(xs, ys);
-    (void)pose_link_take_fresh();
-
-    // Duong thang ly tuong S -> G
-    const float lx = GTP_GOAL_X_M - xs;
-    const float ly = GTP_GOAL_Y_M - ys;
-    const float L  = sqrtf(lx * lx + ly * ly);
-    const float ulx = (L > 1e-6f) ? lx / L : 1.0f;
-    const float uly = (L > 1e-6f) ? ly / L : 0.0f;
-
-    float cross_odo = 0.0f, cross_cam = 0.0f, along_cam = 0.0f;
-    float cross_odo_max = 0.0f, cross_cam_max = 0.0f;
-    float th_err_max = 0.0f;
-    float v_cmd = 0.0f;
-    uint8_t  state = ST_RUN;
-    uint32_t t_stop = 0;
-
-    // Watchdog encoder: lenh banh cua chu ky TRUOC (dang tac dung trong khoang
-    // vua do), so chu ky lien tiep banh bao it xung bat thuong, banh bi loi.
-    float    w_cmd_prev[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    uint16_t enc_bad[4]    = { 0, 0, 0, 0 };
-    int      enc_fail_w    = -1;
-    const uint16_t ENC_BAD_CYCLES = (uint16_t)(GTP_ENC_WD_MS / CONTROL_DT_MS);
-
-    int32_t cnt_log[4] = { 0, 0, 0, 0 };   // tong xung tung banh tu lan log truoc
-    int32_t cnt_tot[4] = { 0, 0, 0, 0 };   // tong xung tung banh ca hanh trinh
-
-    usart6_send_string("GTP,t_ms,v_cmd,x_odo,y_odo,yaw,cam_ok,x_cam,y_cam,th_cam,cross_odo,cross_cam,dist_odo,dFL,dFR,dRL,dRR\r\n");
-
-    const uint32_t t_start = HAL_GetTick();
-    uint32_t last_step = t_start, last_dt = t_start, last_log = t_start - GTP_LOG_EVERY_MS;
-
-    while (1) {
+    // ---------- 1. Cho camera, trung binh GOTO_INIT_FRAMES khung ----------
+    uint32_t last = HAL_GetTick(), last_msg = last;
+    float sx = 0.0f, sy = 0.0f, ss = 0.0f, sc = 0.0f;
+    uint32_t n = 0;
+    while (n < GOTO_INIT_FRAMES) {
         uint32_t now = HAL_GetTick();
-        uint32_t t   = now - t_start;
+        if ((now - last) < CONTROL_DT_MS) continue;
+        float dt = (float)(now - last) / 1000.0f;
+        last = now;
 
         pose_link_poll();
+        int32_t d[4];
+        encoder_get_deltas(d);
+        mpu6050_update(dt);
 
-        if ((now - last_step) < CONTROL_DT_MS) continue;
-        last_step = now;
-
-        float dt = (float)(now - last_dt) / 1000.0f;
-        last_dt = now;
-
-        encoder_get_deltas(dcnt);
-        for (int i = 0; i < 4; i++) { cnt_log[i] += dcnt[i]; cnt_tot[i] += dcnt[i]; }
-
-        if (imu_ready) mpu6050_update(dt);
-        odometry_update(dcnt, dt);
-
-        uint8_t fresh = pose_link_take_fresh();
-
-#if GTP_USE_CAMERA
-        if (fresh) {
-            odometry_set_pose(pose_link_get_x(), pose_link_get_y());
-            float yaw_now = mpu6050_get_yaw_deg();
-            float d = wrap180(pose_link_get_theta_deg() - yaw_now);
-            mpu6050_set_yaw_deg(yaw_now + POSE_YAW_ALPHA * d);
+        if (pose_link_take_fresh()) {
+            float th = pose_link_get_theta_deg() * DEG2RAD;
+            sx += pose_link_get_x(); sy += pose_link_get_y();
+            ss += sinf(th);          sc += cosf(th);
+            n++;
         }
-#endif
-
-        float x  = odometry_get_x();
-        float y  = odometry_get_y();
-        float th = odometry_get_theta_deg();
-
-        cross_odo = ulx * (y - ys) - uly * (x - xs);
-        if (fabsf(cross_odo) > cross_odo_max) cross_odo_max = fabsf(cross_odo);
-
-        if (fresh) {
-            float xc = pose_link_get_x(), yc = pose_link_get_y();
-            cross_cam = ulx * (yc - ys) - uly * (xc - xs);
-            along_cam = ulx * (xc - xs) + uly * (yc - ys);
-            if (fabsf(cross_cam) > cross_cam_max) cross_cam_max = fabsf(cross_cam);
-        }
-
-        float ex   = GTP_GOAL_X_M - x;
-        float ey   = GTP_GOAL_Y_M - y;
-        float dist = sqrtf(ex * ex + ey * ey);
-
-        float th_err = wrap180(GTP_HEADING_DEG - th);
-
-        if (state == ST_RUN) {
-            // --- Watchdog encoder ---
-            for (int i = 0; i < 4 && state == ST_RUN; i++) {
-                float expect = fabsf(w_cmd_prev[i]) * dt / TWO_PI * COUNTS_PER_REV;
-                if (fabsf(w_cmd_prev[i]) >= GTP_ENC_WD_MIN_W &&
-                    (float)iabs(dcnt[i]) < GTP_ENC_WD_RATIO * expect) {
-                    if (++enc_bad[i] >= ENC_BAD_CYCLES) {
-                        state = ST_ENC_FAIL; t_stop = t; enc_fail_w = i;
-                    }
-                } else {
-                    enc_bad[i] = 0;
-                }
-            }
-
-            // --- Phanh an toan bang camera (chi khi co camera luc xuat phat) ---
-            if (state == ST_RUN && cam_start && pose_link_valid()) {
-                if (along_cam > L + GTP_CAM_OVERSHOOT_M)       { state = ST_CAM_VUOT; t_stop = t; }
-                else if (fabsf(cross_cam) > GTP_CAM_CROSS_MAX_M) { state = ST_CAM_LECH; t_stop = t; }
-            }
-
-            if (state == ST_RUN) {
-                if (dist < GTP_TOL_M)        { state = ST_TOI_DICH; t_stop = t; }
-                else if (t > GTP_TIMEOUT_MS) { state = ST_HET_GIO;  t_stop = t; }
-            }
-        }
-
-        if (state != ST_RUN) {
-            robot_set_velocity(0.0f, 0.0f, 0.0f);
-            for (int i = 0; i < 4; i++) w_cmd_prev[i] = 0.0f;
-            v_cmd = 0.0f;
-            if ((t - t_stop) >= GTP_SETTLE_MS) break;
-        } else {
-            if (fabsf(th_err) > th_err_max) th_err_max = fabsf(th_err);
-
-            float thr = th * DEG2RAD;
-            float c = cosf(thr), s = sinf(thr);
-            float uxw = ex / dist, uyw = ey / dist;
-            float uxb =  uxw * c + uyw * s;
-            float uyb = -uxw * s + uyw * c;
-
-            float v = GTP_KP_POS * dist;
-            if (v > GTP_V_MAX) v = GTP_V_MAX;
-            if (t < GTP_RAMP_MS) {
-                float vr = GTP_V_MAX * (float)t / (float)GTP_RAMP_MS;
-                if (v > vr) v = vr;
-            }
-            float vf = v_floor_for(uxb, uyb);
-            if (v < vf) v = vf;
-            v_cmd = v;
-
-            float wz = HEADING_KP * th_err;
-            if (wz >  HEADING_MAX_WZ) wz =  HEADING_MAX_WZ;
-            if (wz < -HEADING_MAX_WZ) wz = -HEADING_MAX_WZ;
-
-            // Bu truot ngay o lenh: truc y chi dat K_SLIP_Y nen ra lenh du hon
-            // de huong di THAT trung duong thang, khong bi cong roi moi sua.
-            float vxb = v * uxb / K_SLIP_X;
-            float vyb = v * uyb / K_SLIP_Y;
-            inverse_kinematics(vxb, vyb, wz, &w_cmd_prev[0], &w_cmd_prev[1],
-                               &w_cmd_prev[2], &w_cmd_prev[3]);
-            robot_set_velocity(vxb, vyb, wz);
-        }
-
-        if ((now - last_log) >= GTP_LOG_EVERY_MS) {
-            last_log = now;
-            usart6_send_string("GTP,");
-            usart6_send_int((int32_t)t);                    usart6_send_char(',');
-            usart6_send_float(v_cmd, 3);                    usart6_send_char(',');
-            send_mm(x);                                     usart6_send_char(',');
-            send_mm(y);                                     usart6_send_char(',');
-            usart6_send_float(th, 1);                       usart6_send_char(',');
-            usart6_send_int(pose_link_valid());             usart6_send_char(',');
-            send_mm(pose_link_get_x());                     usart6_send_char(',');
-            send_mm(pose_link_get_y());                     usart6_send_char(',');
-            usart6_send_float(pose_link_get_theta_deg(), 1); usart6_send_char(',');
-            send_mm(cross_odo);                             usart6_send_char(',');
-            send_mm(cross_cam);                             usart6_send_char(',');
-            send_mm(dist);
-            for (int i = 0; i < 4; i++) {
-                usart6_send_char(',');
-                usart6_send_int(cnt_log[i]);
-                cnt_log[i] = 0;
-            }
+        if ((now - last_msg) >= 1000u) {
+            last_msg = now;
+            usart6_send_string("GOTO:CHO_CAMERA so_khung=");
+            usart6_send_int((int32_t)n);
             usart6_send_string("\r\n");
         }
+    }
+    const float x0 = sx / (float)n, y0 = sy / (float)n, th0 = atan2f(ss, sc);
+    ekf_init(x0, y0, th0, HAL_GetTick());
+    cxp = cyp = cthp = 1e9f;
+    gz_prev = 0.0f;
 
-        if (state == ST_ENC_FAIL && t == t_stop) {
-            usart6_send_string("GTP:ENC_FAIL banh ");
-            usart6_send_string(WNAME[enc_fail_w]);
-            usart6_send_string(" - lenh quay nhung encoder gan nhu khong dem, DUNG KHAN\r\n");
-        } else if (state == ST_CAM_VUOT && t == t_stop) {
-            usart6_send_string("GTP:CAM_VUOT_DICH - camera thay robot da qua dich, DUNG KHAN\r\n");
-        } else if (state == ST_CAM_LECH && t == t_stop) {
-            usart6_send_string("GTP:CAM_LECH_NGANG - camera thay robot lech khoi duong, DUNG KHAN\r\n");
+    usart6_send_string("GOTO:XUAT_PHAT x="); send_mm(x0);
+    usart6_send_string(" y=");               send_mm(y0);
+    usart6_send_string(" th=");              send_deg(th0);
+    usart6_send_string("\r\n");
+
+    // ---------- 2. Dem nguoc, xe dung yen: EKF hoc bias ----------
+    uint32_t t_cd = HAL_GetTick();
+    last = t_cd; last_msg = t_cd - 1000u;
+    st = ST_SETTLE; moving = 0;
+    while ((HAL_GetTick() - t_cd) < GOTO_START_DELAY_MS) {
+        uint32_t now = HAL_GetTick();
+        if ((now - last) < CONTROL_DT_MS) continue;
+        float dt = (float)(now - last) / 1000.0f;
+        last = now;
+        sense(dt, now);
+        if ((now - last_msg) >= 1000u) {
+            last_msg = now;
+            usart6_send_string("GOTO:DEM_NGUOC ");
+            usart6_send_int((int32_t)((GOTO_START_DELAY_MS - (now - t_cd) + 999u) / 1000u));
+            usart6_send_string("\r\n");
         }
     }
 
-    robot_set_velocity(0.0f, 0.0f, 0.0f);
+    // Huong chay va huong cuoi
+    float d0 = hypotf(gx - ekf_x(), gy - ekf_y());
+    float th_goal = ekf_th();
+#if GOTO_FACE_GOAL
+    if (d0 > GOTO_POS_TOL_M) th_goal = atan2f(gy - ekf_y(), gx - ekf_x());
+#endif
+    usart6_send_string("GOTO:HUONG_CHAY="); send_deg(th_goal);
+    usart6_send_string(" do  quang_duong="); send_mm(d0);
+    usart6_send_string(" mm\r\n");
 
-    float xo = odometry_get_x(), yo = odometry_get_y();
-    uint8_t cam_end = pose_link_valid();
-    float xc = pose_link_get_x(), yc = pose_link_get_y(), thc = pose_link_get_theta_deg();
+    // ---------- 3. Chay ----------
+    const uint32_t t0 = HAL_GetTick();
+    uint32_t t_st = 0, last_print = t0;
+    uint8_t  kq = KQ_DAT;
+    uint16_t tries = 0;
+    uint32_t n_resnap = 0;
+    float    v_prev = 0.0f, dist_min = 1e9f, e_prev = 0.0f;
+    float    v_out = 0.0f;
+    last = t0;
+    cam_good_ms = t0;
+    avg_reset();
+    go_state(ST_SETTLE, 0);
+    t_st = 0;
 
-    float gdx = xc - GTP_GOAL_X_M, gdy = yc - GTP_GOAL_Y_M;
-    float odx = xo - xc,           ody = yo - yc;
+    while (st != ST_DONE) {
+        uint32_t now = HAL_GetTick();
+        if ((now - last) < CONTROL_DT_MS) continue;
+        float dt = (float)(now - last) / 1000.0f;
+        last = now;
+        uint32_t t = now - t0;
 
-    usart6_send_string("GTP:DONE\r\n");
+        sense(dt, now);
+
+        float x = ekf_x(), y = ekf_y(), th = ekf_th();
+        float ex = gx - x, ey = gy - y;
+        float dist = hypotf(ex, ey);
+        float eth = wrap_pi(th_goal - th);
+        v_out = 0.0f;
+
+        if (pose_link_take_stop()) { kq = KQ_STOP;    go_state(ST_DONE, t); break; }
+        if (t > GOTO_TIMEOUT_MS)   { kq = KQ_HET_GIO; go_state(ST_DONE, t); break; }
+
+        if (moving && (now - cam_good_ms) > GOTO_CAM_LOST_MS) {
+            go_state(ST_WAIT_CAM, t); t_st = t;
+        }
+
+        switch (st) {
+        case ST_WAIT_CAM:
+            if ((now - cam_good_ms) < CONTROL_DT_MS * 2u) { go_state(ST_SETTLE, t); t_st = t; }
+            break;
+
+        case ST_SETTLE:
+            if (!av_on && av_n == 0 && (t - t_st) >= GOTO_SETTLE_MS - GOTO_SETTLE_AVG_MS) avg_start();
+            if ((t - t_st) < GOTO_SETTLE_MS) break;
+            // Xe dung yen du lau -> camera khong con tre: neu EKF lech trung binh
+            // camera thi tin camera (EKF co the sai khi do tre dat chua dung).
+            if (av_n >= 3) {
+                float ax = av_x / (float)av_n, ay = av_y / (float)av_n, ath = atan2f(av_s, av_c);
+                if (hypotf(ax - x, ay - y) > GOTO_RESNAP_M ||
+                    fabsf(wrap_pi(ath - th)) > GOTO_RESNAP_DEG * DEG2RAD) {
+                    ekf_set_pose(ax, ay, ath, now);
+                    n_resnap++;
+                }
+                x = ax; y = ay; th = ath;
+                ex = gx - x; ey = gy - y;
+                dist = hypotf(ex, ey);
+                eth = wrap_pi(th_goal - th);
+            }
+            av_on = 0;
+            if (dist > GOTO_POS_TOL_M) {
+                if (tries >= GOTO_MAX_TRIES) { kq = KQ_CHUA_DAT; go_state(ST_DONE, t); break; }
+                tries++;
+                if (GOTO_FACE_GOAL && fabsf(eth) > GOTO_TH_GO_DEG * DEG2RAD) {
+                    e_prev = eth; go_state(ST_ROTATE, t);
+                } else {
+                    v_prev = 0.0f; dist_min = dist; go_state(ST_DRIVE, t);
+                }
+            } else if (fabsf(eth) > GOTO_TH_TOL_DEG * DEG2RAD) {
+                if (tries >= GOTO_MAX_TRIES) { kq = KQ_CHUA_DAT; go_state(ST_DONE, t); break; }
+                tries++;
+                e_prev = eth; go_state(ST_ROTATE, t);
+            } else {
+                kq = KQ_DAT; go_state(ST_DONE, t);
+            }
+            t_st = t;
+            break;
+
+        case ST_ROTATE: {
+            // Dung khi du gan hoac vua vuot qua dich (doi dau)
+            if (fabsf(eth) < GOTO_TH_TOL_DEG * DEG2RAD || (eth * e_prev) < 0.0f ||
+                (t - t_st) > GOTO_ROTATE_MAX_MS) {
+                go_state(ST_SETTLE, t); t_st = t;
+                break;
+            }
+            e_prev = eth;
+            float w = GOTO_KP_TH_ROT * fabsf(eth);
+            if (w < GOTO_WZ_MIN) w = GOTO_WZ_MIN;
+            if (w > GOTO_WZ_MAX) w = GOTO_WZ_MAX;
+            robot_set_velocity(0.0f, 0.0f, (eth > 0.0f) ? w : -w);
+            break;
+        }
+
+        case ST_DRIVE: {
+            if (dist < dist_min) dist_min = dist;
+            if (dist < GOTO_STOP_M || dist > dist_min + GOTO_OVERSHOOT_M) {
+                go_state(ST_SETTLE, t); t_st = t;
+                break;
+            }
+            float c = cosf(th), s = sinf(th);
+            float uxw = ex / dist, uyw = ey / dist;
+            float uxb = ( uxw * c + uyw * s) / K_SLIP_X;   // lenh = do doi mong muon / ti le truot
+            float uyb = (-uxw * s + uyw * c) / K_SLIP_Y;
+
+            float v = GOTO_KP_POS * dist;
+            if (v > GOTO_V_MAX) v = GOTO_V_MAX;
+            float vr = v_prev + GOTO_ACCEL * dt;
+            if (v > vr) v = vr;
+            float vf = v_floor_for(uxb, uyb);
+            if (v < vf) v = vf;
+            v_prev = v;
+            v_out = v;
+
+            float wz = GOTO_KP_TH_DRIVE * eth;
+            if (wz >  GOTO_WZ_MAX_DRIVE) wz =  GOTO_WZ_MAX_DRIVE;
+            if (wz < -GOTO_WZ_MAX_DRIVE) wz = -GOTO_WZ_MAX_DRIVE;
+
+            robot_set_velocity(v * uxb, v * uyb, wz);
+            break;
+        }
+        }
+
+#if GOTO_PRINT_EVERY_MS > 0
+        if ((now - last_print) >= GOTO_PRINT_EVERY_MS) {
+            last_print = now;
+            usart6_send_string("GT,");
+            usart6_send_int((int32_t)t);          usart6_send_char(',');
+            usart6_send_string(ST_NAME[st]);      usart6_send_char(',');
+            send_mm(x);                           usart6_send_char(',');
+            send_mm(y);                           usart6_send_char(',');
+            send_deg(th);                         usart6_send_char(',');
+            send_mm(pose_link_get_x());           usart6_send_char(',');
+            send_mm(pose_link_get_y());           usart6_send_char(',');
+            usart6_send_float(pose_link_get_theta_deg(), 1); usart6_send_char(',');
+            send_mm(dist);                        usart6_send_char(',');
+            send_deg(eth);                        usart6_send_char(',');
+            usart6_send_float(v_out, 3);
+            usart6_send_string("\r\n");
+        }
+#endif
+    }
+
+    stop_motors();
+    moving = 0;
+    const uint32_t t_end = HAL_GetTick() - t0;
+
+    // Cho xe dung han + camera bat kip, lay trung binh camera lam ket qua
+    avg_reset();
+    uint32_t t_w = HAL_GetTick();
+    last = t_w;
+    while ((HAL_GetTick() - t_w) < GOTO_SETTLE_MS) {
+        uint32_t now = HAL_GetTick();
+        if ((now - last) < CONTROL_DT_MS) continue;
+        float dt = (float)(now - last) / 1000.0f;
+        last = now;
+        if (!av_on && (now - t_w) >= GOTO_SETTLE_MS - GOTO_SETTLE_AVG_MS) avg_start();
+        sense(dt, now);
+    }
+    float fx = ekf_x(), fy = ekf_y(), fth = ekf_th();
+    uint8_t cam_ok = (av_n > 0);
+    float cx = cam_ok ? av_x / (float)av_n : pose_link_get_x();
+    float cy = cam_ok ? av_y / (float)av_n : pose_link_get_y();
+    float cth = cam_ok ? atan2f(av_s, av_c) : pose_link_get_theta_deg() * DEG2RAD;
+    float err_xy = hypotf(gx - cx, gy - cy);
+    float err_th = wrap_pi(th_goal - cth);
 
     while (1) {
-        usart6_send_string("GTPSUM,ket_qua=");
-        switch (state) {
-            case ST_TOI_DICH: usart6_send_string("TOI_DICH"); break;
-            case ST_HET_GIO:  usart6_send_string("HET_GIO");  break;
-            case ST_ENC_FAIL: usart6_send_string("ENC_FAIL_");
-                              usart6_send_string(WNAME[enc_fail_w]); break;
-            case ST_CAM_VUOT: usart6_send_string("CAM_VUOT_DICH"); break;
-            case ST_CAM_LECH: usart6_send_string("CAM_LECH_NGANG"); break;
-            default:          usart6_send_string("?"); break;
+        usart6_send_string("===== GOTO KET QUA =====\r\n");
+        usart6_send_string("ket_qua: ");
+        switch (kq) {
+            case KQ_DAT:      usart6_send_string("DAT");           break;
+            case KQ_CHUA_DAT: usart6_send_string("CHUA_DAT (het so lan dieu chinh)"); break;
+            case KQ_HET_GIO:  usart6_send_string("HET_GIO");       break;
+            default:          usart6_send_string("DUNG_BOI_STOP"); break;
         }
-        usart6_send_string(",t_ms=");       usart6_send_int((int32_t)t_stop);
-        usart6_send_string(",quang_duong_ly_tuong_mm="); send_mm(L);
+        usart6_send_string("\r\ndich:            x="); send_mm(gx);
+        usart6_send_string(" mm  y=");                send_mm(gy);
+        usart6_send_string(" mm  huong=");            send_deg(th_goal);
+        usart6_send_string(" do\r\nxuat_phat:       x="); send_mm(x0);
+        usart6_send_string(" mm  y=");                send_mm(y0);
+        usart6_send_string(" mm  th=");               send_deg(th0);
+        usart6_send_string(" do\r\ncuoi_camera:     x="); send_mm(cx);
+        usart6_send_string(" mm  y=");                send_mm(cy);
+        usart6_send_string(" mm  th=");               send_deg(cth);
+        usart6_send_string(cam_ok ? " do  (trung binh khi dung yen)\r\n" : " do  (KHONG co khung moi!)\r\n");
+        usart6_send_string("cuoi_ekf:        x=");    send_mm(fx);
+        usart6_send_string(" mm  y=");                send_mm(fy);
+        usart6_send_string(" mm  th=");               send_deg(fth);
+        usart6_send_string(" do\r\nsai_so (camera): vi_tri="); send_mm(err_xy);
+        usart6_send_string(" mm  huong=");            send_deg(err_th);
+        usart6_send_string(" do\r\nthoi_gian_ms=");   usart6_send_int((int32_t)t_end);
+        usart6_send_string("  so_lan_dieu_chinh="); usart6_send_int(tries);
+        usart6_send_string("\r\nekf: bias=");         usart6_send_float(ekf_bias() * RAD2DEG, 3);
+        usart6_send_string(" do/s  khung_nhan=");     usart6_send_int((int32_t)ekf_n_ok());
+        usart6_send_string("  khung_loai=");          usart6_send_int((int32_t)ekf_n_reject());
+        usart6_send_string("  nap_lai=");             usart6_send_int((int32_t)ekf_n_reset());
+        usart6_send_string("  chinh_theo_cam_dung_yen="); usart6_send_int((int32_t)n_resnap);
         usart6_send_string("\r\n");
-
-        usart6_send_string("GTPSUM,odo=(");  send_mm(xo); usart6_send_char(';'); send_mm(yo);
-        usart6_send_string(") cam=(");       send_mm(xc); usart6_send_char(';'); send_mm(yc);
-        usart6_send_string(") th_cam=");     usart6_send_float(thc, 1);
-        usart6_send_string(" cam_ok=");      usart6_send_int(cam_end);
-        usart6_send_string("\r\n");
-
-        usart6_send_string("GTPSUM,SAI_SO_THAT(cam-dich): dx=");  send_mm(gdx);
-        usart6_send_string(" dy=");  send_mm(gdy);
-        usart6_send_string(" d=");   send_mm(sqrtf(gdx * gdx + gdy * gdy));
-        usart6_send_string(" mm\r\n");
-
-        usart6_send_string("GTPSUM,TROI_ODO(odo-cam): dx=");  send_mm(odx);
-        usart6_send_string(" dy=");  send_mm(ody);
-        usart6_send_string(" d=");   send_mm(sqrtf(odx * odx + ody * ody));
-        usart6_send_string(" mm\r\n");
-
-        usart6_send_string("GTPSUM,cross_max_cam=");  send_mm(cross_cam_max);
-        usart6_send_string("mm cross_max_odo=");      send_mm(cross_odo_max);
-        usart6_send_string("mm th_err_max=");         usart6_send_float(th_err_max, 1);
-        usart6_send_string("do\r\n");
-
-        // Tong xung ca hanh trinh: di cheo thi FR~RL va FL~RR, cap nhanh ~2.5x
-        // cap cham. Banh nao lech han cap cua no la banh co van de.
-        usart6_send_string("GTPSUM,xung_tong FL=");  usart6_send_int(cnt_tot[0]);
-        usart6_send_string(" FR=");                  usart6_send_int(cnt_tot[1]);
-        usart6_send_string(" RL=");                  usart6_send_int(cnt_tot[2]);
-        usart6_send_string(" RR=");                  usart6_send_int(cnt_tot[3]);
-        usart6_send_string("\r\n");
-
-        HAL_Delay(3000);
+        HAL_Delay(5000);
     }
 }

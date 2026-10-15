@@ -3,16 +3,14 @@
 #include "gpio.h"
 #include "motor.h"
 #include "encoder.h"
-#include "kinematics.h"
 #include "odometry.h"
 #include "usart6.h"
 #include "mpu6050.h"
 #include "pose_link.h"
-#include "pwm_test.h"
+#include "robot_control.h"
+#include "enc_run_test.h"
 #include "goto_test.h"
 #include <math.h>
-#include <stdio.h>
-#include "robot_control.h"
 
 int main(void)
 {
@@ -27,17 +25,6 @@ int main(void)
     pose_link_init();
 
     usart6_send_string("STM32:BOOT\r\n");
-
-#if PWM_TEST_ENABLE
-    // Bai do nguong PWM: chiem toan quyen dieu khien dong co, do xong thi treo
-    // lai in ket qua. KHONG bao gio chay tiep xuong vong dieu khien ben duoi.
-    pwm_test_run();
-#endif
-
-#if PWM_TEST2_ENABLE
-    // Pha 2: do tren san, camera lam trong tai. Can gateway + camera dang chay.
-    pwm_test2_run();
-#endif
 
     uint8_t who_am_i = mpu6050_probe();
     usart6_send_string("STM32:WHO_AM_I=");
@@ -57,18 +44,12 @@ int main(void)
     encoder_reset_all();
     odometry_reset();
 
-#if POSE_CHECK_ENABLE
-    // Chi doc, khong chay dong co. Chay sau hieu chuan IMU de co ca 2 nguon goc.
-    pose_theta_check_run(imu_ready);
-#endif
-
-#if STRAIGHT_TEST_ENABLE
-    // Chay thang qua dung duong van hanh that - CAN khoang trong phia truoc.
-    straight_test_run(imu_ready);
+#if ENC_RUN_TEST_ENABLE
+    enc_run_test_run(imu_ready);   // khong bao gio return
 #endif
 
 #if GOTO_TEST_ENABLE
-    goto_test_run(imu_ready);
+    goto_test_run(imu_ready);      // khong bao gio return
 #endif
 
     usart6_send_string("STM32:RUNNING\r\n");
@@ -103,14 +84,12 @@ int main(void)
 
 #if POSE_LINK_ENABLE
             // Co khung hinh MOI -> ghi de pose bang nguon tuyet doi tu camera.
-            // Khong ghi de lap lai gia tri cu moi chu ky: giua 2 khung hinh,
-            // odometry encoder+gyro van chay tiep de giu nhip 50Hz muot.
+            // Giua 2 khung hinh, odometry encoder+gyro van chay tiep 50Hz.
             if (pose_link_take_fresh()) {
                 odometry_set_pose(pose_link_get_x(), pose_link_get_y());
 
-                // Sai lech goc phai chuan hoa ve [-180,180] TRUOC khi tron:
-                // yaw gyro cong don khong bi gioi han, con theta camera nam
-                // trong [-180,180] - tru thang se nhay 360 do khi vuot bien.
+                // Chuan hoa sai lech goc ve [-180,180] TRUOC khi tron: yaw gyro
+                // cong don khong gioi han, theta camera nam trong [-180,180].
                 float yaw_now = mpu6050_get_yaw_deg();
                 float d = pose_link_get_theta_deg() - yaw_now;
                 while (d >  180.0f) d -= 360.0f;
@@ -132,16 +111,15 @@ int main(void)
                 usart6_send_string("\r\n");
             }
 
-            // Van toc tinh tien muc tieu trong he THE GIOI - van bang 0 o buoc
-            // nay: robot dung yen, chi tu giu huong. Vong go-to-point (tinh
-            // target_vx/vy tu sai so den diem dich) se thay 2 dong nay o buoc sau.
+            // Van toc tinh tien muc tieu trong he THE GIOI (m/s).
+            // Mac dinh 0: robot dung yen, chi tu giu huong.
             float target_vx_world = 0.0f;
             float target_vy_world = 0.0f;
 
             float theta_now_deg = odometry_get_theta_deg();
             float theta_now_rad = theta_now_deg * 0.017453293f;   // deg -> rad
 
-            // World -> body: nghich dao dung phep xoay da dung trong odometry_update (R(theta)^T)
+            // World -> body: R(theta)^T, nghich dao phep xoay trong odometry_update
             float vx_body =  target_vx_world * cosf(theta_now_rad) + target_vy_world * sinf(theta_now_rad);
             float vy_body = -target_vx_world * sinf(theta_now_rad) + target_vy_world * cosf(theta_now_rad);
 

@@ -36,6 +36,8 @@ float    pose_link_get_x(void);          // met
 float    pose_link_get_y(void);          // met
 float    pose_link_get_theta_deg(void);  // do
 
+uint8_t  pose_link_take_stop(void);   // 1 = vua nhan lenh STOP (tu xoa co)
+
 uint32_t pose_link_get_rx_ok(void);    // so dong pose hop le
 uint32_t pose_link_get_rx_other(void); // so dong lenh biet nhung chua xu ly (START/STOP/WP*)
 uint32_t pose_link_get_rx_err(void);   // so dong khong hieu duoc / ngoai vung hop le

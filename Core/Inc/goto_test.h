@@ -3,20 +3,24 @@
 
 #include <stdint.h>
 
-// Bai chay toi 1 diem (GTP_GOAL_X_M; GTP_GOAL_Y_M) trong he the gioi.
-// Robot dat tai goc (0;0), dau xe theo truc X. Duong di mong muon la doan
-// thang tu diem xuat phat toi dich; dau xe giu GTP_HEADING_DEG suot hanh trinh
-// (mecanum tinh tien cheo, khong quay dau).
+// Bai go-to-point: robot dat ngau nhien trong vung camera, tu chay toi dich
+// (GOTO_GOAL_X_CM; GOTO_GOAL_Y_CM) tren he camera G.
 //
-// Dinh dang log (moi GTP_LOG_EVERY_MS):
-//   GTP,t_ms,v_cmd,x_odo,y_odo,yaw,cam_ok,x_cam,y_cam,th_cam,cross_odo,cross_cam,dist_odo,dFL,dFR,dRL,dRR
-//     x,y,cross,dist: mm   yaw,th: do   cross > 0 = lech sang TRAI duong thang
-//     dFL..dRR: so xung tung banh trong 100 ms vua qua (da nhan ENC_SIGN)
+// Vi tri dung de dieu khien = EKF tron camera (tuyet doi, tre) voi encoder + gyro.
+// GOTO_FACE_GOAL = 1: xoay tai cho cho mui xe huong ve dich -> chay thang toi ->
+// tai dich mui xe van huong theo duong di (S -> G).
 //
-//   GTP:ENC_FAIL / CAM_VUOT_DICH / CAM_LECH_NGANG - dung khan, in ngay luc xay ra
-//   GTPSUM,... - tong ket, in lap lai moi 3 giay (ket_qua, sai so, xung tong)
+// Trinh tu: hieu chuan gyro (main.c, xe dung yen) -> cho camera, lay trung binh
+// GOTO_INIT_FRAMES khung lam diem xuat phat -> dem nguoc -> chay.
+// Gui "29;STOP#" qua gateway de dung khan.
 //
-// Goi SAU khi hieu chuan IMU. Ham khong bao gio return.
+// In ra (qua esp32R -> esp32Server):
+//   GOTO:...  su kien (doi trang thai)
+//   GT,t_ms,trang_thai,x_mm,y_mm,th_deg,xc_mm,yc_mm,thc_deg,dist_mm,loi_huong_deg,v
+//       moi GOTO_PRINT_EVERY_MS ; x,y,th = EKF ; xc,yc,thc = khung camera cuoi
+//   ===== GOTO KET QUA ===== ...  in lai moi 5 s
+//
+// Ham khong bao gio return.
 void goto_test_run(uint8_t imu_ready);
 
 #endif

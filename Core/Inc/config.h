@@ -1,39 +1,27 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// ---------------------------------------------------------------------------
+// PWM - TIM1, 20 kHz, duty 0..PWM_MAX-1
+// ---------------------------------------------------------------------------
 #define PWM_MAX         800u
 #define DUTY(percent)   ((percent) * PWM_MAX / 100u)
 
+// ---------------------------------------------------------------------------
+// Hinh hoc robot
+// ---------------------------------------------------------------------------
 #define WHEEL_R  0.034f
-#define K_GEOM   0.17125f
+#define K_GEOM   0.17125f   // g + h
 
 // Ty le quang duong THAT / quang duong encoder dem, theo tung truc than xe.
-// Chi dung trong odometry.c: odometry biet dung vi tri that thi vong
-// go-to-point tu ra lenh bu phan truot, khong can sua IK.
-// Uoc luong tu bai chay cheo toi (180;60) ngay 28/09/2026 (camera lam trong
-// tai): truc x dat 97%, truc y chi dat 75% (con lan mecanum truot khi di
-// ngang). Chinh lai bang 2 bai rieng: dich (1.80;0) va (0;0.60).
+// Chi dung trong odometry.c. Uoc luong tam, chua do rieng tung truc.
 #define K_SLIP_X 0.97f
 #define K_SLIP_Y 0.75f
 
 // ---------------------------------------------------------------------------
-// Quy doi toc do goc banh (rad/s) -> duty PWM.   duty = OFFSET[banh] + K_FF*|w|
+// Quy doi toc do goc banh (rad/s) -> duty PWM:  duty = OFFSET[banh] + K_FF*|w|
+// OFFSET bu ma sat tinh, rieng tung banh (hieu chuan 23-24/09/2026).
 // ---------------------------------------------------------------------------
-// Dang cu "duty = K_FF*|w|" KHONG co offset la sai ve nguyen tac: dong co co
-// ma sat tinh nen can mot luong duty toi thieu moi bat dau quay. Hau qua la o
-// toc do thap duty roi xuong duoi nguong va banh dung im, con o toc do cao lai
-// cap thua. Hai sai so nguoc chieu nhau nen chinh rieng K_FF khong bao gio sua
-// duoc - phai them so hang offset.
-//
-// So lieu do duoc (4 bai do, 23-24/09/2026 - xem pwm_test.c):
-//   nguong khoi dong tung banh, ke banh khong tai:  FL 90, FR 115, RL 125, RR 115
-//   duong dac tinh co tai (pha 2 co bu nguong):     v = 0.00146*(duty_tb - 42)
-//   -> K_FF = 23.3 ; offset[banh] = nguong[banh] - 69
-//   Kiem chung cheo: thay w = 2.97 rad/s vao ra dung duty 90 cho FL (= nguong
-//   do duoc) va v = 0.101 m/s, khop voi 0.102 m/s do thuc te.
-//
-// K_FF cu = 29.3 (va truoc do 66.0) da bi bo: cach hieu chinh cu chi nhan/chia
-// ca he so ma khong biet den offset nen khong the dung cho ca dai toc do.
 #define K_FF     23.3f
 
 #define MOTOR_DUTY_OFFSET_FL   21.0f
@@ -41,186 +29,159 @@
 #define MOTOR_DUTY_OFFSET_RL   56.0f
 #define MOTOR_DUTY_OFFSET_RR   46.0f
 
-// Toc do goc banh nho nhat ma banh THUC SU quay duoc tren san, va toc do robot
-// tuong ung khi ca 4 banh cung o muc do. Duoi muc nay duty roi xuong duoi
-// nguong khoi dong: firmware van cap PWM nhung banh khong nhuc nhich.
-// => vong go-to-point KHONG duoc ra lenh cham hon ROBOT_V_MIN, neu khong robot
-//    se dung im trong khi van "tuong" la dang di toi dich.
-// Day la can TREN: bai do bat dau tu dung muc nay nen chua thu thap hon duoc.
+// Toc do goc banh nho nhat ma banh thuc su quay tren san, va toc do robot
+// tuong ung khi di thang. Duoi muc nay banh dung im du van co PWM.
+// Day la can tren (chua do thap hon).
 #define MOTOR_OMEGA_MIN        2.97f
 #define ROBOT_V_MIN            0.102f
 
-#define COUNTS_PER_REV  1500.0f
+// ---------------------------------------------------------------------------
+// Encoder
+// ---------------------------------------------------------------------------
+#define COUNTS_PER_REV  1496.0f   // xung/vong truc banh (x4), theo thong so nha san xuat
 #define TWO_PI          6.283185307f
 
 #ifndef PI
 #define PI              3.14159265359f
 #endif
 
-#define CONTROL_DT_MS   20u
+// ---------------------------------------------------------------------------
+// Vong dieu khien
+// ---------------------------------------------------------------------------
+#define CONTROL_DT_MS   20u   // 50 Hz
 
-// Goc huong than xe muon giu, doc lap voi van toc tinh tien (vx,vy) - vong
-// P-controller ben duoi tu chinh wz de bam theo goc nay bang gyro MPU6050.
+// Vong giu huong: P-controller tren yaw gyro, doc lap voi (vx, vy)
 #define THETA_TARGET_DEG   0.0f
-
 #define HEADING_KP         0.02f
-#define HEADING_MAX_WZ     0.5f
+#define HEADING_MAX_WZ     0.5f   // rad/s
 
 // ---------------------------------------------------------------------------
-// Nguon vi tri TUYET DOI tu camera tran (gateway esp32C -> esp32R -> USART6 RX)
+// Pose tuyet doi tu camera tran (gateway esp32C -> esp32R -> USART6 RX)
 // ---------------------------------------------------------------------------
-// 1 = moi khung hinh camera ghi de (x, y, theta) cua robot; giua 2 khung hinh
-//     odometry encoder + gyro van tiep tuc tich phan binh thuong.
-// 0 = bo qua hoan toan du lieu camera, chay dead-reckoning thuan nhu truoc.
+// 1 = moi khung hinh moi ghi de (x, y, theta); giua 2 khung hinh odometry
+//     encoder + gyro van tich phan binh thuong.
+// 0 = bo qua du lieu camera, chay dead-reckoning thuan.
 #define POSE_LINK_ENABLE       1
 
 // Qua thoi gian nay khong nhan duoc dong pose nao -> pose_link_valid() = 0
-// (marker bi che, camera treo, mat song ESP-NOW). Robot KHONG tu dong lam gi
-// o buoc nay vi chua di chuyen; khi them go-to-point thi day la dieu kien dung.
 #define POSE_LINK_TIMEOUT_MS   500u
 
-// Goi tin tu gateway KHONG co checksum: day la lop chan duy nhat chong goi
-// nhieu/hong. Dat theo kich thuoc vung camera quet duoc (don vi cm).
+// Goi tin khong co checksum: gioi han vung hop le (cm) la lop chan duy nhat
 #define POSE_XY_ABS_MAX_CM     1000.0f
 
-// He so lay theta tu camera: 1.0 = tin camera hoan toan moi khung hinh.
-// Giam xuong (vd 0.2-0.4) neu theta tu ArUco nhieu - khi do gyro giu phan
-// ngan han, camera chi keo dan ve gia tri tuyet doi. Rieng khung hinh DAU
-// TIEN luon lay 1.0 de co goc goc tuyet doi ngay lap tuc.
+// He so tron theta camera vao yaw: 1.0 = tin camera hoan toan.
+// Khung hinh dau tien luon lay 1.0.
 #define POSE_YAW_ALPHA         1.0f
 
-// In dong telemetry PLINK moi N chu ky dieu khien (N=10 -> 5Hz). Khong in moi
-// chu ky vi USART6 TX dang blocking, 3 dong/20ms se cham tran thoi gian.
+// In PLINK moi N chu ky (10 -> 5 Hz). USART6 TX blocking nen khong in moi chu ky.
 #define POSE_LOG_EVERY_N       10u
 
 // ---------------------------------------------------------------------------
-// Bai do nguong PWM khoi dong 4 banh (pwm_test.c) - xem pwm_test.h
+// Bai chay thang thuan encoder (enc_run_test.c)
 // ---------------------------------------------------------------------------
-// 1 = boot vao thang bai do roi TREO lai, KHONG chay vong dieu khien binh
-//     thuong (de vong giu huong bang gyro khong can thiep vao PWM khi dang do).
-// NHO DOI VE 0 va nap lai sau khi do xong.
-#define PWM_TEST_ENABLE        0
+// 1 = boot xong vao thang bai chay roi treo lai in ket qua, khong xuong vong
+//     dieu khien chinh. Khong dung IMU, khong dung camera.
+#define ENC_RUN_TEST_ENABLE     0
 
-#define PWM_TEST_STEP          5u    // moi nac tang duty bao nhieu
-#define PWM_TEST_DWELL_MS      400u  // giu moi nac bao lau truoc khi doc encoder
-#define PWM_TEST_MAX_DUTY      400u  // 50% PWM_MAX - den day chua quay thi bo cuoc
+#define ENC_RUN_DIST_M         3.0f
+// Dung khi 1 banh BAT KY dat so xung nay (3.00 m, 1496 xung/vong -> 21008)
+#define ENC_RUN_TARGET_COUNTS   ((int32_t)(ENC_RUN_DIST_M / (TWO_PI * WHEEL_R) * COUNTS_PER_REV))
 
-// So xung toi thieu trong 1 nac de coi la DA QUAY. 20 xung / 1500 xung moi
-// vong ~ 5 do - du de phan biet quay that voi rung tai cho.
-#define PWM_TEST_MIN_COUNTS    20
+#define ENC_RUN_V               0.40f   // m/s
+#define ENC_RUN_RAMP_MS         300u    // tang toc tu ROBOT_V_MIN len ENC_RUN_V; 0 = khong ramp
+#define ENC_RUN_HEADING_HOLD    0       // 1 = giu huong bang theta tinh tu encoder
 
-// So nac LIEN TIEP phai quay duoc moi cong nhan la nguong. Mot nac don le co
-// the chi la dong co giat mot cai vuot ma sat tinh roi ket lai - doi 3 nac
-// lien nhau thi loai duoc truong hop do. Nguong lay la nac DAU cua chuoi.
-#define PWM_TEST_CONFIRM_STEPS 3
+// 1 = cap CUNG 1 duty cho ca 4 banh, bo qua OFFSET va K_FF (va ENC_RUN_V,
+//     ENC_RUN_HEADING_HOLD) - de xem do lech tu nhien giua 4 banh.
+// 0 = chay theo van toc ENC_RUN_V nhu binh thuong.
+#define ENC_RUN_EQUAL_DUTY      1
+#define ENC_RUN_DUTY            400     // ~0.4 m/s: trung binh duty 4 banh lan chay truoc
+#define ENC_RUN_DUTY_START      130     // duty luc xuat phat, tren nguong cao nhat (RL 125)
 
-// Sau khi chot nguong thi chay them bao nhieu nac de lay duong dac tinh
-// duty->toc do (do doc doan nay = K_FF thuc cua rieng banh do). Khong quet
-// het dai vi banh dang ke tren khong, quay nhanh qua khong can thiet.
-#define PWM_TEST_EXTRA_STEPS   10
+// --- Giu huong bang IMU (chi dung voi ENC_RUN_EQUAL_DUTY = 1) ---
+//   e = 0 - yaw_imu (do)      u = KP*e + KI*tich_phan(e) - KD*gyro_z   (duty)
+//   FL, RL = duty - u ;  FR, RR = duty + u      (u > 0 -> xe quay trai)
+// Thu tu chinh: (1) chi KP -> kiem tra dau  (2) them KD = 0.3
+//               (3) them KI = 3.0 de keo yaw ve dung 0 (mo phong: ~3 s)
+#define ENC_RUN_IMU_HOLD        1       // TAM TAT: chay thuan encoder (IMU van doc va ghi log)
+#define HH_KP                   3.0f    // duty / do
+#define HH_KI                   3.0f    // duty / (do*s)
+#define HH_KD                   0.3f    // duty / (do/s)
+#define HH_U_MAX                60.0f   // gioi han hieu chinh (duty)
+#define HH_I_MAX                30.0f   // gioi han phan tich phan (duty)
+#define ENC_RUN_START_DELAY_MS  3000u   // dem nguoc truoc khi chay
+#define ENC_RUN_TIMEOUT_MS      12000u
 
-// --- PHA 2: do tren san that, ca 4 banh cung duty, camera lam trong tai ---
-// Chi bat 1 trong 2 pha mot luc. Pha 2 CAN gateway + camera dang chay.
-#define PWM_TEST2_ENABLE        0
+#define ENC_RUN_LOG_EVERY_MS    100u
+// USART6 TX blocking (~7 ms/dong): ngung in khi con it hon so xung nay toi moc
+// de viec kiem tra dieu kien dung khong bi tre.
+#define ENC_RUN_LOG_GUARD       600
 
-// Kiem tra quy uoc dau theta camera (pose_theta_check_run): chi doc, khong
-// chay dong co. Bat -> boot xong la vao thang, xoay robot bang tay de xem.
-// DA CHAY 24/09/2026: camera va gyro CUNG CHIEU, goc 0 do trung truc X,
-// hai nguon lech nhau 0.1 do sau khi xoay 90 do -> quy uoc DUNG, giu nguyen.
-// Nhieu theta camera luc dung yen: do lech chuan 0.53 do (R cho Kalman).
-#define POSE_CHECK_ENABLE       0
-
-// --- Bai chay thang: kiem chung K_FF, vong giu huong, do tre camera ---
-// CAN gateway + camera dang chay, va khoang trong >1.5m phia truoc dau xe.
-#define STRAIGHT_TEST_ENABLE    0
-
-#define ST_TARGET_V             0.15f   // m/s - tren V_MIN (0.102) mot khoang an toan
-#define ST_RAMP_MS              500u    // tang toc dan, tranh truot banh luc khoi hanh
-#define ST_HOLD_MS              3000u   // doan giu toc do on dinh - dung de do v_thuc
-#define ST_COAST_MS             2000u   // sau khi cat lenh, theo doi tiep de do do tre
-#define ST_LOG_EVERY_MS         100u
-
-// Nguong PWM khoi dong tung banh, do duoc o pha 1 (ke banh, khong tai).
-// Sua lai theo ket qua PWMSUM cua chinh robot neu do lai lan nua.
-#define PWM_TH_FL               90u
-#define PWM_TH_FR               115u
-#define PWM_TH_RL               125u
-#define PWM_TH_RR               115u
-
-// 0 = ca 4 banh cung MOT duty (do tho, thay ro banh nao ket truoc).
-// 1 = moi banh duoc cong nguong rieng cua no: duty[w] = PWM_TH[w] + delta.
-//     Ca 4 banh cung "xuat phat" tai delta = 0, nen day vua la phep do vua
-//     la phep THU cach bu vung chet: neu bu dung thi dtheta phai nho han va
-//     4 cot encoder phai deu nhau han so voi che do 0.
-//     LUU Y: khi bat, cot dau tien trong log la DELTA, khong phai duty.
-#define PWM_TEST2_USE_OFFSET    1
-
-#define PWM_TEST2_STEP          5u
-
-#if PWM_TEST2_USE_OFFSET
-  #define PWM_TEST2_START       0u     // delta bat dau tu 0
-  #define PWM_TEST2_MAX_DUTY    150u   // delta toi da (duty that = + PWM_TH)
-#else
-  #define PWM_TEST2_START       PWM_TEST2_STEP
-  #define PWM_TEST2_MAX_DUTY    400u
-#endif
-
-#define PWM_TEST2_DWELL_MS      1200u  // thoi gian cap duty moi nac
-#define PWM_TEST2_SETTLE_MS     1000u  // cho robot dung han + pose bat kip
-
-// Quang duong toi thieu (met) trong 1 nac de coi la robot DA DI CHUYEN.
-// Phai lon hon nhieu lan nhieu vi tri cua camera, neu khong se nham nhieu
-// thanh chuyen dong. 25mm la an toan khi camera nhieu vai mm.
-// Dat theo DWELL: 40mm trong 1.2s tuong duong 0.033 m/s.
-#define PWM_TEST2_MIN_MOVE_M    0.040f
-
-#define PWM_TEST2_CONFIRM_STEPS 3
-#define PWM_TEST2_EXTRA_STEPS   12
+#define ENC_RUN_REST_MS         300u    // khong co xung moi trong ngan nay -> xe da dung han
+#define ENC_RUN_COAST_MAX_MS    3000u
 
 // ---------------------------------------------------------------------------
-// Bai chay toi diem (goto_test.c) - robot dat tai (0;0), dau xe theo truc X
+// Bai go-to-point: camera + encoder + IMU tron bang EKF (goto_test.c, ekf.c)
 // ---------------------------------------------------------------------------
-// Muc dich: voi nhung gi dang co (feedforward + vong giu huong + odometry),
-// robot co toi dung dich khong, va duong di thang hay cong.
+// 1 = boot xong (hieu chuan gyro, xe PHAI dung yen) vao thang bai go-to-point.
 #define GOTO_TEST_ENABLE        1
 
-#define GTP_GOAL_X_M            1.80f
-#define GTP_GOAL_Y_M            0.60f
-#define GTP_HEADING_DEG         0.0f    // giu dau xe theo truc X suot hanh trinh
+// Toa do dich tren he camera G (cm) - cung don vi voi camera gui len
+#define GOTO_GOAL_X_CM          180.0f
+#define GOTO_GOAL_Y_CM          60.0f
 
-// 0 = CHI odometry (encoder + gyro) dieu khien, camera chi lam TRONG TAI
-//     -> do duoc sai so dead-reckoning that su.
-// 1 = camera ghi de pose moi khung hinh nhu vong chinh (co tre camera).
-#define GTP_USE_CAMERA          0
+// 1 = xoay tai cho cho mui xe huong ve dich, chay thang toi, toi noi mui xe
+//     huong theo duong di (xuat phat -> dich)
+// 0 = giu huong ban dau, chay cheo toi dich
+#define GOTO_FACE_GOAL          1
 
-#define GTP_V_MAX               0.22f   // m/s
-#define GTP_KP_POS              0.8f    // (m/s)/m - giam toc khi con < ~27 cm
-// Toc do san = GTP_WHEEL_MARGIN * MOTOR_OMEGA_MIN o banh CHAM NHAT.
-// Di cheo 18.4 do thi FL/RR chi quay bang 1/2 FR/RL: o 0.15 m/s FL/RR = 2.79
-// rad/s < 2.97 -> dung im. Nen toc do san phai tinh theo huong di, khong
-// dung ROBOT_V_MIN (chi dung cho di thang).
-#define GTP_WHEEL_MARGIN        1.2f
-#define GTP_RAMP_MS             400u
-#define GTP_TOL_M               0.015f  // coi la toi dich (theo odometry)
-#define GTP_TIMEOUT_MS          20000u
-#define GTP_SETTLE_MS           3000u   // dung roi cho them: camera tre ~1.5s
-#define GTP_CAM_WAIT_MS         3000u   // cho pose camera luc bat dau
-#define GTP_START_AVG_MS        3000u   // camera ~3 khung/s -> 3s moi du ~9 khung
-#define GTP_LOG_EVERY_MS        100u
+#define GOTO_POS_TOL_M          0.03f   // sai so vi tri chap nhan (kiem tra luc dung yen)
+#define GOTO_STOP_M             0.015f  // dang chay: con cach dich chung nay thi cat lenh
+#define GOTO_OVERSHOOT_M        0.03f   // xa dan hon diem gan nhat chung nay -> dung, tinh lai
+#define GOTO_TH_TOL_DEG         3.0f    // sai so huong chap nhan
+#define GOTO_TH_GO_DEG          10.0f   // lech hon muc nay thi xoay tai cho truoc khi chay
 
-// Watchdog encoder: banh dang duoc lenh quay >= MIN_W rad/s ma so xung do
-// duoc < RATIO * so xung le ra phai co, lien tuc WD_MS -> dung khan, bao
-// ENC_FAIL_<banh>. Bat ca 2 truong hop: day encoder long (dong co van quay)
-// va banh ket that (dong co khong quay). MIN_W = 3.0 ngay tren nguong khoi
-// dong 2.97 de ca cap banh cham khi di cheo cung duoc kiem.
-#define GTP_ENC_WD_MIN_W        3.0f    // rad/s
-#define GTP_ENC_WD_RATIO        0.2f
-#define GTP_ENC_WD_MS           300u
+#define GOTO_V_MAX              0.25f   // m/s
+#define GOTO_ACCEL              0.4f    // m/s^2
+#define GOTO_KP_POS             1.0f    // (m/s) / m
+#define GOTO_WHEEL_MARGIN       1.2f    // banh cham nhat >= 1.2 x MOTOR_OMEGA_MIN
+#define GOTO_KP_TH_DRIVE        2.0f    // (rad/s) / rad - giu huong khi dang chay
+#define GOTO_WZ_MAX_DRIVE       0.6f    // rad/s
+#define GOTO_KP_TH_ROT          2.0f    // xoay tai cho
+#define GOTO_WZ_MIN             0.9f    // rad/s - xoay tai cho can >= 0.6 de banh vuot nguong
+#define GOTO_WZ_MAX             1.5f
+#define GOTO_ROTATE_MAX_MS      8000u
 
-// Phanh an toan bang camera (chi hoat dong khi co camera luc xuat phat):
-// dung khan neu camera thay robot da qua dich hon OVERSHOOT theo huong di,
-// hoac lech ngang khoi duong thang hon CROSS_MAX.
-#define GTP_CAM_OVERSHOOT_M     0.20f
-#define GTP_CAM_CROSS_MAX_M     0.30f
+// Pha dung yen: cho xe het troi + camera het tre, roi lay trung binh camera trong
+// GOTO_SETTLE_AVG_MS cuoi. Dung voi do tre camera <= SETTLE - AVG (600 ms).
+#define GOTO_SETTLE_MS          900u
+#define GOTO_SETTLE_AVG_MS      300u
+#define GOTO_RESNAP_M           0.01f   // EKF lech trung binh camera (dung yen) hon muc nay -> dat lai theo camera
+#define GOTO_RESNAP_DEG         2.0f
+#define GOTO_MAX_TRIES          10      // so lan xoay/chay lai toi da
+#define GOTO_INIT_FRAMES        10      // so khung camera lay trung binh lam diem xuat phat
+#define GOTO_START_DELAY_MS     3000u
+#define GOTO_CAM_LOST_MS        1000u   // dang chay ma mat camera qua lau -> dung, cho camera
+#define GOTO_TIMEOUT_MS         60000u
+#define GOTO_GZ_MAX_DPS         250.0f  // |gyro z| lon hon -> coi la gai nhieu, giu mau truoc
+#define GOTO_PRINT_EVERY_MS     200u    // dong GT,... ; 0 = khong in
+
+// --- EKF: trang thai [X, Y, theta, bias gyro] ---
+#define EKF_CAM_DELAY_MS        200u    // do tre camera UOC LUONG (bai goto 28/09), chua do lai
+#define EKF_R_XY_M              0.01f   // nhieu x, y camera (do lech chuan) - chua do
+#define EKF_R_TH_DEG            0.53f   // nhieu theta camera, do 24/09/2026
+#define EKF_Q_ENC_X             0.03f   // sai so quang duong doc than xe (truot 0-3%)
+#define EKF_Q_ENC_Y             0.10f   // ngang than xe (K_SLIP_Y chua do ky)
+#define EKF_Q_ENC_MIN_M         0.0005f // moi chu ky
+#define EKF_Q_GYRO_DPS          0.5f    // nhieu gyro z
+#define EKF_Q_GYRO_SCALE        0.02f   // sai so ti le gyro khi xoay
+#define EKF_Q_BIAS_DPS          0.02f   // bias troi (do/s/sqrt(s))
+#define EKF_B0_DPS              0.5f    // do bat dinh bias luc dau
+#define EKF_GATE                16.3f   // chi^2 3 bac tu do, 99.9%
+#define EKF_REJECT_RESET        10      // loai lien tiep chung nay khung -> nap lai tu camera
+
+#if ENC_RUN_TEST_ENABLE && GOTO_TEST_ENABLE
+#error "Chi bat 1 bai test: ENC_RUN_TEST_ENABLE hoac GOTO_TEST_ENABLE"
+#endif
 
 #endif

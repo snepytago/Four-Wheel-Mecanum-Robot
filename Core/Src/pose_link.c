@@ -12,6 +12,7 @@ static float    pose_theta_deg = 0.0f;
 static uint32_t pose_last_ms   = 0;
 static uint8_t  pose_fresh     = 0;
 static uint8_t  pose_got_first = 0;
+static uint8_t  stop_req       = 0;
 
 static uint32_t rx_ok    = 0;
 static uint32_t rx_other = 0;
@@ -106,6 +107,7 @@ void pose_link_init(void)
     pose_last_ms   = 0;
     pose_fresh     = 0;
     pose_got_first = 0;
+    stop_req       = 0;
     rx_ok = rx_other = rx_err = 0;
 }
 
@@ -124,6 +126,7 @@ void pose_link_poll(void)
             pose_got_first = 1;
             rx_ok++;
         } else if (is_known_command(line_buf)) {
+            if (str_starts_with(line_buf, "STOP")) stop_req = 1;
             rx_other++;
         } else {
             rx_err++;
@@ -135,6 +138,13 @@ uint8_t pose_link_take_fresh(void)
 {
     uint8_t f = pose_fresh;
     pose_fresh = 0;
+    return f;
+}
+
+uint8_t pose_link_take_stop(void)
+{
+    uint8_t f = stop_req;
+    stop_req = 0;
     return f;
 }
 

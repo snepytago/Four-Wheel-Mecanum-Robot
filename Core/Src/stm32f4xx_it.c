@@ -41,7 +41,6 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-extern volatile uint32_t sys_tick_ms;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/

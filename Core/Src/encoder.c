@@ -53,22 +53,22 @@ static void encoder_timers_init(void)
                    | RCC_APB1ENR_TIM4EN | RCC_APB1ENR_TIM5EN;
 
     TIM5->CCMR1 = (1u<<0) | (1u<<8);   // FL - 32-bit
-    TIM5->SMCR  = (3u<<0);
+    TIM5->SMCR  = (3u<<0); // sms 011 encoder mode 3
     TIM5->ARR   = 0xFFFFFFFF;
     TIM5->CR1   = TIM_CR1_CEN;
 
     TIM3->CCMR1 = (1u<<0) | (1u<<8);   // FR - 16-bit
-    TIM3->SMCR  = (3u<<0);
+    TIM3->SMCR  = (3u<<0);// sms 011 encoder mode 3
     TIM3->ARR   = 0xFFFF;
     TIM3->CR1   = TIM_CR1_CEN;
 
     TIM2->CCMR1 = (1u<<0) | (1u<<8);   // RL - 32-bit
-    TIM2->SMCR  = (3u<<0);
+    TIM2->SMCR  = (3u<<0);// sms 011 encoder mode 3
     TIM2->ARR   = 0xFFFFFFFF;
     TIM2->CR1   = TIM_CR1_CEN;
 
     TIM4->CCMR1 = (1u<<0) | (1u<<8);   // RR - 16-bit
-    TIM4->SMCR  = (3u<<0);
+    TIM4->SMCR  = (3u<<0);// sms 011 encoder mode 3
     TIM4->ARR   = 0xFFFF;
     TIM4->CR1   = TIM_CR1_CEN;
 }
