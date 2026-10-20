@@ -1,6 +1,7 @@
 %% plot_fwmr_runs.m
-% Ve lai cac lan chay 2.4 m thuan encoder cua robot FWMR, co hieu ung xe
-% chay, ghi ro toa do diem cuoi lay tu khoi KET QUA cua STM32.
+% Ve lai cac lan chay cua robot FWMR (ve ngay, khong animation), ghi ro toa do
+% diem cuoi lay tu khoi KET QUA cua STM32, tu luu PNG: <ten log>_quy_dao.png,
+% <ten log>_xung_banh.png, <ten log>_yaw.png.
 %
 % Can 2 file cung thu muc: fwmr_parse_log.m va file log (.txt).
 % x tien, y trai, goc duong = quay trai. Log co IMU thi mac dinh ve theo
@@ -13,19 +14,11 @@
 %% ===================== CAU HINH =====================
 LOG_FILE  = 'log_imu_kp3_07102026.txt';
 RUNS_SHOW = [];        % [] = ve tat ca; vd [2 4] = chi lan 2 va lan 4
-SPEED     = 1.0;       % 1 = thoi gian thuc, 2 = nhanh gap doi, 0.5 = cham
-FRAME_MS  = 50;        % buoc thoi gian moi khung hinh (ms)
-SAVE_GIF  = false;     % true = luu animation ra file GIF
-GIF_FILE  = 'fwmr_runs.gif';
+SAVE_PNG  = true;      % tu luu toan bo hinh ra PNG
 TARGET_MM = 3000;      % quang duong muc tieu
 TARGET_CNT = 21008;    % so xung moc dung
 POSE_SRC  = 'auto';    % 'auto' = dung IMU neu log co, 'enc' = luon dung encoder
 PT_SIZE   = 4;         % kich thuoc cham moi diem du lieu
-
-% Kich thuoc robot (mm): banh o (+-H, +-G), ban kinh banh 34 mm
-G = 95.75;  H = 75.5;
-BODY_L = 220;  BODY_W = 160;
-WHEEL_D = 68;  WHEEL_W = 30;
 
 % Mau theo thu tu co dinh: lan 1 xanh duong, 2 cam, 3 xanh ngoc, 4 vang ...
 PALETTE = [0.165 0.471 0.839;   % #2a78d6
@@ -79,18 +72,7 @@ for i = 1:nR
 end
 fprintf('\n');
 
-%% ===================== HINH 1: QUY DAO + HIEU UNG XE CHAY =====================
-% Hinh dang robot trong he than xe (mm)
-body_loc = [ BODY_L/2  BODY_W/2; -BODY_L/2  BODY_W/2; -BODY_L/2 -BODY_W/2; BODY_L/2 -BODY_W/2];
-nose_loc = [ BODY_L/2 + 40 0; BODY_L/2 - 10 30; BODY_L/2 - 10 -30];   % mui ten huong
-wc = [H G; -H G; H -G; -H -G];                                          % tam banh FL RL FR RR
-wheel_loc = zeros(16, 2);
-for w = 1:4
-    wheel_loc(4*w-3:4*w, :) = repmat(wc(w, :), 4, 1) + ...
-        [WHEEL_D/2 WHEEL_W/2; -WHEEL_D/2 WHEEL_W/2; -WHEEL_D/2 -WHEEL_W/2; WHEEL_D/2 -WHEEL_W/2];
-end
-wheel_faces = reshape(1:16, 4, 4).';
-
+%% ===================== HINH 1: QUY DAO =====================
 % Gioi han truc
 allx = []; ally = [];
 for i = 1:nR
@@ -115,66 +97,14 @@ text(TARGET_MM + 20, yl(2) - 40, sprintf('x = %d mm', TARGET_MM), 'Color', INK2,
      'FontSize', 9, 'VerticalAlignment', 'top');
 plot(ax, 0, 0, 'o', 'MarkerSize', 7, 'MarkerFaceColor', INK, 'MarkerEdgeColor', 'w');
 text(-30, -60, 'xuat phat (0; 0)', 'Color', INK2, 'FontSize', 9, 'HorizontalAlignment', 'right');
-t_label = text(xl(1) + 40, yl(2) - 40, 't = 0.00 s', 'Color', INK, 'FontSize', 12, ...
-               'VerticalAlignment', 'top');
-
-% Doi tuong cua tung lan chay
-h_trail = zeros(1, nR); h_body = h_trail; h_nose = h_trail; h_wheel = h_trail;
+% Ve ngay toan bo duong di cua tung lan chay
+h_trail = zeros(1, nR);
 for i = 1:nR
     c = PALETTE(i, :);
-    h_trail(i) = plot(ax, NaN, NaN, '-o', 'Color', c, 'LineWidth', 1.25, ...
+    r = runs(ids(i));
+    h_trail(i) = plot(ax, r.x, r.y, '-o', 'Color', c, 'LineWidth', 1.25, ...
                       'MarkerSize', PT_SIZE, 'MarkerFaceColor', c, 'MarkerEdgeColor', c);
-    h_body(i)  = patch('Parent', ax, 'XData', NaN, 'YData', NaN, 'FaceColor', c, ...
-                       'FaceAlpha', 0.30, 'EdgeColor', c, 'LineWidth', 1.5);
-    h_nose(i)  = patch('Parent', ax, 'XData', NaN, 'YData', NaN, 'FaceColor', c, 'EdgeColor', 'none');
-    h_wheel(i) = patch('Parent', ax, 'Faces', wheel_faces, 'Vertices', wheel_loc, ...
-                       'FaceColor', [0.25 0.25 0.25], 'EdgeColor', 'none');
 end
-
-% Thoi gian chung cho animation
-t_end = 0;
-for i = 1:nR, t_end = max(t_end, runs(ids(i)).t_ms(end)); end
-tt = [0:FRAME_MS:t_end, t_end];
-
-gif_ok = SAVE_GIF;
-for f = 1:numel(tt)
-    tic;
-    for i = 1:nR
-        r  = runs(ids(i));
-        n  = max(1, sum(r.t_ms <= tt(f)));        % diem log moi nhat da toi
-        px = r.x(n);  py = r.y(n);  pt = r.th(n) * pi / 180;
-        R  = [cos(pt) -sin(pt); sin(pt) cos(pt)];
-        B  = (R * body_loc.').'  + [px py];
-        N  = (R * nose_loc.').'  + [px py];
-        W  = (R * wheel_loc.').' + [px py];
-        set(h_trail(i), 'XData', r.x(1:n), 'YData', r.y(1:n));
-        set(h_body(i),  'XData', B(:, 1), 'YData', B(:, 2));
-        set(h_nose(i),  'XData', N(:, 1), 'YData', N(:, 2));
-        set(h_wheel(i), 'Vertices', W);
-    end
-    set(t_label, 'String', sprintf('t = %.2f s', tt(f) / 1000));
-    drawnow;
-
-    if gif_ok
-        try
-            im = frame2im(getframe(fig1));
-            if f == 1, mode = {'LoopCount', inf}; else, mode = {'WriteMode', 'append'}; end
-            if exist('OCTAVE_VERSION', 'builtin')          % GNU Octave
-                imwrite(im, GIF_FILE, 'gif', mode{:}, 'DelayTime', FRAME_MS/1000/SPEED);
-            else                                           % MATLAB
-                [A, map] = rgb2ind(im, 256);
-                imwrite(A, map, GIF_FILE, 'gif', mode{:}, 'DelayTime', FRAME_MS/1000/SPEED);
-            end
-        catch err
-            warning('Khong luu duoc GIF (%s) - bo qua.', err.message);
-            gif_ok = false;
-        end
-    end
-    pause(max(0, FRAME_MS / 1000 / SPEED - toc));
-end
-
-% Chay xong: bo hinh xe, chi giu duong di + 1 cham o diem cuoi
-delete([h_body h_nose h_wheel]);
 
 % Diem cuoi + nhan toa do (lay tu khoi KET QUA), nhan xep thanh 1 cot ben phai
 % va gian cach de khong de chu len nhau khi cac diem cuoi gan nhau.
@@ -211,9 +141,6 @@ for i = 1:nR
 end
 legend(h_trail, arrayfun(@(k) sprintf('Lan %d', k), ids, 'UniformOutput', false), ...
        'Location', 'southwest', 'TextColor', LEG_INK);
-if gif_ok
-    fprintf('Da luu animation: %s\n', GIF_FILE);
-end
 
 %% ===================== HINH 2: XUNG CUOI CUNG TUNG BANH =====================
 fig2 = figure('Name', 'FWMR - xung tung banh', 'Color', 'w', 'Position', [80 120 760 460]);
@@ -267,4 +194,13 @@ if any(has_imu(ids))
     keep = h_y ~= 0;
     legend(ax3, h_y(keep), arrayfun(@(k) sprintf('Lan %d', k), ids(keep), 'UniformOutput', false), ...
            'Location', 'southeast', 'TextColor', LEG_INK);
+end
+
+%% ===================== LUU HINH =====================
+if SAVE_PNG
+    [~, base] = fileparts(LOG_FILE);
+    print(fig1, [base '_quy_dao.png'], '-dpng', '-r130');
+    print(fig2, [base '_xung_banh.png'], '-dpng', '-r130');
+    if exist('fig3', 'var') && ishandle(fig3), print(fig3, [base '_yaw.png'], '-dpng', '-r130'); end
+    fprintf('Da luu hinh: %s_*.png\n', base);
 end

@@ -15,6 +15,7 @@ void    ekf_set_pose(float x, float y, float th, uint32_t t_ms);
 void    ekf_predict(float dx_b, float dy_b, float gz_rad_s, float dt, uint32_t t_ms);
 
 // 1 = nhan khung, 0 = loai (ngoai cong), 2 = loai lien tiep qua nhieu -> nap lai tu camera
+//     (co bu tre: dich trang thai + lich su theo do lech tai t_meas, giu bias)
 uint8_t ekf_update_cam(float xc, float yc, float thc, uint32_t t_meas_ms);
 
 float    ekf_x(void);
@@ -25,5 +26,6 @@ float    ekf_sigma_xy(void);   // do lech chuan vi tri (m), lay max cua X, Y
 uint32_t ekf_n_ok(void);
 uint32_t ekf_n_reject(void);
 uint32_t ekf_n_reset(void);
+float    ekf_reset_jump(void); // do nhay vi tri lan nap lai gan nhat (m)
 
 #endif

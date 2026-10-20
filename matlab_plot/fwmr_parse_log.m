@@ -20,6 +20,11 @@ function runs = fwmr_parse_log(filename)
 %   yaw, gz, u, xi, yi   : yaw IMU (do), gyro z (do/s), hieu chinh (duty),
 %                          toa do encoder + huong IMU (mm)
 %   xi_end, yi_end, yaw_end, yaw_max_abs, u_mean, kp, ki, kd : tu khoi KET QUA
+%   Log EKF (19 cot, ekf_run_test) them:
+%   xi, yi, yaw = pose EKF ; xc, yc, thc = khung camera cuoi ; camn = so khung
+%   camera tron vao EKF tu dong truoc ; s = hieu chinh ngang (duty)
+%   xc_end, yc_end, thc_end : toa do camera trung binh luc dung yen
+%   ekf_bias, n_cam_ok, n_cam_rej, n_reset, cam_gap_ms : dong "ekf:" cua khoi KET QUA
 
 fid = fopen(filename, 'r');
 if fid < 0
@@ -53,8 +58,10 @@ while true
     if strncmp(ln, 'ENC,', 4)
         v = sscanf(ln(5:end), '%f,');
         if numel(v) == 9
-            v = [v; NaN(5, 1)];                    % log cu, chua co cot IMU
-        elseif numel(v) ~= 14
+            v = [v; NaN(10, 1)];                   % log cu, chua co cot IMU
+        elseif numel(v) == 14
+            v = [v; NaN(5, 1)];                    % chua co cot camera
+        elseif numel(v) ~= 19
             continue;
         end
         if ~isempty(runs(k).t_ms) && v(1) == runs(k).t_ms(end)
@@ -71,6 +78,11 @@ while true
         runs(k).u(end+1, 1)     = v(12);
         runs(k).xi(end+1, 1)    = v(13);
         runs(k).yi(end+1, 1)    = v(14);
+        runs(k).xc(end+1, 1)    = v(15);
+        runs(k).yc(end+1, 1)    = v(16);
+        runs(k).thc(end+1, 1)   = v(17);
+        runs(k).camn(end+1, 1)  = v(18);
+        runs(k).s(end+1, 1)     = v(19);
 
     elseif strncmp(ln, 'ket_qua:', 8) && isempty(runs(k).hit_wheel)
         tok = regexp(ln, 'banh (\w+)', 'tokens', 'once');
@@ -89,12 +101,29 @@ while true
             runs(k).cnt_final = str2double(tok);
         end
 
-    elseif strncmp(ln, 'toa_do_imu_cuoi_cung:', 21) && isnan(runs(k).xi_end)
+    elseif (strncmp(ln, 'toa_do_imu_cuoi_cung:', 21) || strncmp(ln, 'toa_do_ekf_cuoi_cung:', 21)) ...
+            && isnan(runs(k).xi_end)
         tok = regexp(ln, 'x=(-?\d+)\s*mm\s+y=(-?\d+)\s*mm\s+yaw=(-?[\d.]+)', 'tokens', 'once');
         if numel(tok) == 3
             runs(k).xi_end  = str2double(tok{1});
             runs(k).yi_end  = str2double(tok{2});
             runs(k).yaw_end = str2double(tok{3});
+        end
+
+    elseif strncmp(ln, 'toa_do_camera_cuoi_cung:', 24) && isnan(runs(k).xc_end)
+        tok = regexp(ln, 'x=(-?\d+)\s*mm\s+y=(-?\d+)\s*mm\s+th=(-?[\d.]+)', 'tokens', 'once');
+        if numel(tok) == 3
+            runs(k).xc_end  = str2double(tok{1});
+            runs(k).yc_end  = str2double(tok{2});
+            runs(k).thc_end = str2double(tok{3});
+        end
+
+    elseif strncmp(ln, 'ekf:', 4) && isnan(runs(k).cam_gap_ms)
+        tok = regexp(ln, 'bias=(-?[\d.]+).*khung_nhan=(\d+)\s+khung_loai=(\d+)\s+nap_lai=(\d+)\s+mat_cam_lau_nhat_ms=(\d+)', 'tokens', 'once');
+        if numel(tok) == 5
+            v5 = str2double(tok);
+            runs(k).ekf_bias = v5(1); runs(k).n_cam_ok = v5(2); runs(k).n_cam_rej = v5(3);
+            runs(k).n_reset  = v5(4); runs(k).cam_gap_ms = v5(5);
         end
 
     elseif strncmp(ln, 'imu:', 4) && isnan(runs(k).yaw_max_abs)
@@ -149,5 +178,9 @@ r = struct('t_ms', zeros(0, 1), 'cmd', zeros(0, 1), 'cnt', zeros(0, 4), ...
            'yaw', zeros(0, 1), 'gz', zeros(0, 1), 'u', zeros(0, 1), ...
            'xi', zeros(0, 1), 'yi', zeros(0, 1), ...
            'xi_end', NaN, 'yi_end', NaN, 'yaw_end', NaN, ...
-           'yaw_max_abs', NaN, 'u_mean', NaN, 'kp', NaN, 'ki', NaN, 'kd', NaN);
+           'yaw_max_abs', NaN, 'u_mean', NaN, 'kp', NaN, 'ki', NaN, 'kd', NaN, ...
+           'xc', zeros(0, 1), 'yc', zeros(0, 1), 'thc', zeros(0, 1), ...
+           'camn', zeros(0, 1), 's', zeros(0, 1), ...
+           'xc_end', NaN, 'yc_end', NaN, 'thc_end', NaN, ...
+           'ekf_bias', NaN, 'n_cam_ok', NaN, 'n_cam_rej', NaN, 'n_reset', NaN, 'cam_gap_ms', NaN);
 end

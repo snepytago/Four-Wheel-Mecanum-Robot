@@ -26,11 +26,6 @@ POSE_SRC  = 'imu';     % 'imu' = quang duong encoder + huong IMU (cong bang cho 
                        % 'enc' = thuan encoder (x, y, theta encoder)
 TARGET_MM = 3000;      % duong co so
 TOL_MM    = 50;        % hanh lang cho phep quanh duong co so (+- mm)
-ANIMATE   = true;      % true = cho 2 xe chay song song truoc khi hien ket qua
-SPEED     = 1.0;       % toc do animation: 1 = thoi gian thuc, 2 = nhanh gap doi
-FRAME_MS  = 50;
-WAIT      = 'phim';    % 'phim' = bam phim / click vao hinh de sang cap ke tiep
-                       % so (vd 3) = tu sang cap ke sau 3 s
 SAVE_PNG  = true;      % luu moi cap thanh so_sanh_lan_k.png (+ so_sanh_tong_hop.png)
 PT_SIZE   = 4;
 
@@ -46,8 +41,6 @@ GRIDC  = [0.88 0.88 0.87];
 LEG_INK = [1 1 1];              % chu bang chu thich (trang, nen toi)
 LEG_BG  = [0.20 0.20 0.20];
 
-% Hinh robot (mm)
-G = 95.75;  H = 75.5;  BODY_L = 220;  BODY_W = 160;  WHEEL_D = 68;  WHEEL_W = 30;
 
 %% ===================== DOC LOG =====================
 RE = fwmr_parse_log(LOG_ENC);
@@ -128,16 +121,6 @@ YL  = [min(ally) - 120, max(max(ally), 0) + 170];
 YL2 = [min(ally) - 40,  max(max(ally), 0) + 60];
 HL  = [min(allh) - 2,   max(max(allh), 0) + 2];
 
-% Hinh robot trong he than xe
-body_loc  = [BODY_L/2 BODY_W/2; -BODY_L/2 BODY_W/2; -BODY_L/2 -BODY_W/2; BODY_L/2 -BODY_W/2];
-nose_loc  = [BODY_L/2 + 40 0; BODY_L/2 - 10 30; BODY_L/2 - 10 -30];
-wc = [H G; -H G; H -G; -H -G];
-wheel_loc = zeros(16, 2);
-for w = 1:4
-    wheel_loc(4*w-3:4*w, :) = repmat(wc(w, :), 4, 1) + ...
-        [WHEEL_D/2 WHEEL_W/2; -WHEEL_D/2 WHEEL_W/2; -WHEEL_D/2 -WHEEL_W/2; WHEEL_D/2 -WHEEL_W/2];
-end
-wheel_faces = reshape(1:16, 4, 4).';
 
 CC   = {C_ENC, C_IMU};
 NAME = {NAME_ENC, NAME_IMU};
@@ -149,8 +132,7 @@ fig = figure('Name', 'FWMR - so sanh thuan encoder vs vong IMU', 'Color', 'w', .
 
 %% ===================== VONG LAP TUNG CAP =====================
 for k = PAIRS
-    if ~ishandle(fig), break; end
-    clf(fig);
+        clf(fig);
     A = {Q{1}(k), Q{2}(k)};
 
     % ---------- Truc tren: quy dao ----------
@@ -177,46 +159,12 @@ for k = PAIRS
     title(ax, sprintf('Cap %d/%d:  %s  vs  %s   -   toa do theo %s', k, nP, NAME_ENC, NAME_IMU, src_txt), ...
           'Color', INK, 'FontWeight', 'bold', 'FontSize', 12);
 
-    h_tr = zeros(1, 2); h_b = h_tr; h_n = h_tr; h_w = h_tr;
-    for m = 1:2
+    h_tr = zeros(1, 2);
+    for m = 1:2                                         % ve ngay toan bo duong di (ca doan troi)
         c = CC{m};
-        h_tr(m) = plot(ax, NaN, NaN, '-o', 'Color', c, 'LineWidth', 1.5, 'MarkerSize', PT_SIZE, ...
+        h_tr(m) = plot(ax, A{m}.px, A{m}.py, '-o', 'Color', c, 'LineWidth', 1.5, 'MarkerSize', PT_SIZE, ...
                        'MarkerFaceColor', c, 'MarkerEdgeColor', c);
-        h_b(m) = patch('Parent', ax, 'XData', NaN, 'YData', NaN, 'FaceColor', c, 'FaceAlpha', 0.30, ...
-                       'EdgeColor', c, 'LineWidth', 1.5);
-        h_n(m) = patch('Parent', ax, 'XData', NaN, 'YData', NaN, 'FaceColor', c, 'EdgeColor', 'none');
-        h_w(m) = patch('Parent', ax, 'Faces', wheel_faces, 'Vertices', wheel_loc, ...
-                       'FaceColor', [0.25 0.25 0.25], 'EdgeColor', 'none');
     end
-
-    % ---------- Animation 2 xe chay song song ----------
-    t_end = max(A{1}.t_ms(end), A{2}.t_ms(end));
-    if ANIMATE, tt = [0:FRAME_MS:t_end, t_end]; else, tt = t_end; end
-    t_lab = text(XL(1) + 40, YL(2) - 30, '', 'Color', INK, 'FontSize', 11, 'VerticalAlignment', 'top');
-    for f = 1:numel(tt)
-        if ~ishandle(fig), break; end
-        tic;
-        for m = 1:2
-            r = A{m};
-            n = max(1, sum(r.t_ms <= tt(f)));
-            px = r.px(n);  py = r.py(n);  pt = r.hd(n) * pi / 180;
-            R = [cos(pt) -sin(pt); sin(pt) cos(pt)];
-            set(h_tr(m), 'XData', r.px(1:n), 'YData', r.py(1:n));
-            if ANIMATE
-                B = (R * body_loc.').' + [px py];
-                N = (R * nose_loc.').' + [px py];
-                W = (R * wheel_loc.').' + [px py];
-                set(h_b(m), 'XData', B(:, 1), 'YData', B(:, 2));
-                set(h_n(m), 'XData', N(:, 1), 'YData', N(:, 2));
-                set(h_w(m), 'Vertices', W);
-            end
-        end
-        set(t_lab, 'String', sprintf('t = %.2f s', tt(f) / 1000));
-        drawnow;
-        if ANIMATE, pause(max(0, FRAME_MS / 1000 / SPEED - toc)); end
-    end
-    if ~ishandle(fig), break; end
-    delete([h_b h_n h_w]);
 
     % ---------- Diem cuoi + do lech ngang so voi duong co so ----------
     ye = [A{1}.py_end, A{2}.py_end];
@@ -319,18 +267,6 @@ for k = PAIRS
     fprintf('Cap %d: |y| cuoi %.0f -> %.0f mm (%+.0f%%), |goc| max %.1f -> %.1f do (%+.0f%%)\n', ...
             k, MET(1, k, 1), MET(2, k, 1), -IMP(1, k, 1), MET(1, k, 5), MET(2, k, 5), -IMP(1, k, 5));
 
-    if k ~= PAIRS(end)
-        if ischar(WAIT)
-            fprintf('   -> bam phim hoac click vao hinh de xem cap tiep theo...\n');
-            try
-                waitforbuttonpress;
-            catch
-                break;                                % da dong hinh -> dung
-            end
-        else
-            pause(WAIT);
-        end
-    end
 end
 
 %% ===================== TONG HOP 8 CAP =====================
@@ -358,10 +294,6 @@ fprintf('(gia tri = trung binh +- do lech chuan; p < 0.05 -> khac biet co y nghi
 
 if ~ishandle(fig) || numel(PAIRS) < 2
     return;
-end
-if ischar(WAIT)
-    fprintf('Bam phim / click de xem hinh tong hop...\n');
-    try, waitforbuttonpress; catch, end
 end
 
 fig2 = figure('Name', 'FWMR - tong hop so sanh', 'Color', 'w', 'Position', [60 80 1400 520]);

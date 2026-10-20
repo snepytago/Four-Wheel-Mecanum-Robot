@@ -1,0 +1,31 @@
+#ifndef GOTO_TEST_H
+#define GOTO_TEST_H
+
+#include <stdint.h>
+
+// Bai go-to-point: robot dat ngau nhien trong vung camera, tu chay toi dich
+// (GOTO_GOAL_X_CM; GOTO_GOAL_Y_CM) tren he camera G.
+//
+// Vi tri dung de dieu khien = EKF tron camera (tuyet doi, tre) voi encoder + gyro.
+// GOTO_FACE_GOAL = 1: xoay tai cho cho mui xe huong ve dich -> chay thang toi ->
+// tai dich mui xe van huong theo duong di (S -> G).
+//
+// Trinh tu: hieu chuan gyro (main.c, xe dung yen) -> cho camera, lay trung binh
+// GOTO_INIT_FRAMES khung lam diem xuat phat -> dem nguoc -> chay.
+// Gui "29;STOP#" qua gateway de dung khan.
+//
+// Log (STM32 -> esp32R -> ESP-NOW -> esp32 laptop):
+//   GOTO:...  su kien (doi trang thai)
+//   GT,t_ms,trang_thai,FL,FR,RL,RR,x_mm,y_mm,th_deg,xc_mm,yc_mm,thc_deg,cam,
+//      xo_mm,yo_mm,tho_deg,gz_dps,v,wz,dist_mm,lech_mm        moi GOTO_LOG_EVERY_MS
+//     FL..RR   : xung luy ke tu luc bat dau chay
+//     x,y,th   : EKF (dung de dieu khien)
+//     xc,yc,thc: khung camera cuoi (tre ~EKF_CAM_DELAY_MS) ; cam = so khung da tron tu dong truoc
+//     xo,yo,tho: odometry thuan encoder + gyro, khong nhan camera (de so sanh)
+//     v, wz    : lenh toc do (m/s, rad/s) ; dist: con cach dich ; lech: lech ngang EKF so voi S -> G
+//   ===== GOTO KET QUA ===== ...  in lai moi 5 s
+//
+// Ham khong bao gio return.
+void goto_test_run(uint8_t imu_ready);
+
+#endif

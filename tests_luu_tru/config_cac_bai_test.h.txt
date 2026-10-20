@@ -1,0 +1,113 @@
+// Cac khoi cau hinh da go khoi config.h ngay 19/10/2026 khi don ha tang.
+// Muon chay lai 1 bai: chep khoi tuong ung vao config.h, chep file .c/.h ve Core.
+
+// ---------------------------------------------------------------------------
+// Bai chay thang thuan encoder (enc_run_test.c)
+// ---------------------------------------------------------------------------
+// 1 = boot xong vao thang bai chay roi treo lai in ket qua, khong xuong vong
+//     dieu khien chinh. Khong dung IMU, khong dung camera.
+#define ENC_RUN_TEST_ENABLE     0
+
+#define ENC_RUN_DIST_M         3.0f
+// Dung khi 1 banh BAT KY dat so xung nay (3.00 m, 1496 xung/vong -> 21008)
+#define ENC_RUN_TARGET_COUNTS   ((int32_t)(ENC_RUN_DIST_M / (TWO_PI * WHEEL_R) * COUNTS_PER_REV))
+
+#define ENC_RUN_V               0.40f   // m/s
+#define ENC_RUN_RAMP_MS         300u    // tang toc tu ROBOT_V_MIN len ENC_RUN_V; 0 = khong ramp
+#define ENC_RUN_HEADING_HOLD    0       // 1 = giu huong bang theta tinh tu encoder
+
+// 1 = cap CUNG 1 duty cho ca 4 banh, bo qua OFFSET va K_FF (va ENC_RUN_V,
+//     ENC_RUN_HEADING_HOLD) - de xem do lech tu nhien giua 4 banh.
+// 0 = chay theo van toc ENC_RUN_V nhu binh thuong.
+#define ENC_RUN_EQUAL_DUTY      1
+#define ENC_RUN_DUTY            400     // ~0.4 m/s: trung binh duty 4 banh lan chay truoc
+#define ENC_RUN_DUTY_START      130     // duty luc xuat phat, tren nguong cao nhat (RL 125)
+
+// --- Giu huong bang IMU (chi dung voi ENC_RUN_EQUAL_DUTY = 1) ---
+//   e = 0 - yaw_imu (do)      u = KP*e + KI*tich_phan(e) - KD*gyro_z   (duty)
+//   FL, RL = duty - u ;  FR, RR = duty + u      (u > 0 -> xe quay trai)
+// Thu tu chinh: (1) chi KP -> kiem tra dau  (2) them KD = 0.3
+//               (3) them KI = 3.0 de keo yaw ve dung 0 (mo phong: ~3 s)
+#define ENC_RUN_IMU_HOLD        1       // TAM TAT: chay thuan encoder (IMU van doc va ghi log)
+#define HH_KP                   3.0f    // duty / do
+#define HH_KI                   3.0f    // duty / (do*s)
+#define HH_KD                   0.3f    // duty / (do/s)
+#define HH_U_MAX                60.0f   // gioi han hieu chinh (duty)
+#define HH_I_MAX                30.0f   // gioi han phan tich phan (duty)
+#define ENC_RUN_START_DELAY_MS  3000u   // dem nguoc truoc khi chay
+#define ENC_RUN_TIMEOUT_MS      12000u
+
+#define ENC_RUN_LOG_EVERY_MS    100u
+// USART6 TX blocking (~7 ms/dong): ngung in khi con it hon so xung nay toi moc
+// de viec kiem tra dieu kien dung khong bi tre.
+#define ENC_RUN_LOG_GUARD       600
+
+#define ENC_RUN_REST_MS         300u    // khong co xung moi trong ngan nay -> xe da dung han
+#define ENC_RUN_COAST_MAX_MS    3000u
+
+// ---------------------------------------------------------------------------
+// Bai go-to-point: camera + encoder + IMU tron bang EKF (goto_test.c, ekf.c)
+// ---------------------------------------------------------------------------
+// 1 = boot xong (hieu chuan gyro, xe PHAI dung yen) vao thang bai go-to-point.
+#define GOTO_TEST_ENABLE        0
+
+// Toa do dich tren he camera G (cm) - cung don vi voi camera gui len
+#define GOTO_GOAL_X_CM          180.0f
+#define GOTO_GOAL_Y_CM          60.0f
+
+// 1 = xoay tai cho cho mui xe huong ve dich, chay thang toi, toi noi mui xe
+//     huong theo duong di (xuat phat -> dich)
+// 0 = giu huong ban dau, chay cheo toi dich
+#define GOTO_FACE_GOAL          1
+
+#define GOTO_POS_TOL_M          0.03f   // sai so vi tri chap nhan (kiem tra luc dung yen)
+#define GOTO_STOP_M             0.015f  // dang chay: con cach dich chung nay thi cat lenh
+#define GOTO_OVERSHOOT_M        0.03f   // xa dan hon diem gan nhat chung nay -> dung, tinh lai
+#define GOTO_TH_TOL_DEG         3.0f    // sai so huong chap nhan
+#define GOTO_TH_GO_DEG          10.0f   // lech hon muc nay thi xoay tai cho truoc khi chay
+
+#define GOTO_V_MAX              0.25f   // m/s
+#define GOTO_ACCEL              0.4f    // m/s^2
+#define GOTO_KP_POS             1.0f    // (m/s) / m
+#define GOTO_WHEEL_MARGIN       1.2f    // banh cham nhat >= 1.2 x MOTOR_OMEGA_MIN
+#define GOTO_KP_TH_DRIVE        2.0f    // (rad/s) / rad - giu huong khi dang chay
+#define GOTO_WZ_MAX_DRIVE       0.6f    // rad/s
+#define GOTO_KP_TH_ROT          2.0f    // xoay tai cho
+#define GOTO_WZ_MIN             0.9f    // rad/s - xoay tai cho can >= 0.6 de banh vuot nguong
+#define GOTO_WZ_MAX             1.5f
+#define GOTO_ROTATE_MAX_MS      8000u
+
+// Pha dung yen: cho xe het troi + camera het tre, roi lay trung binh camera trong
+// GOTO_SETTLE_AVG_MS cuoi. Dung voi do tre camera <= SETTLE - AVG (600 ms).
+#define GOTO_SETTLE_MS          900u
+#define GOTO_SETTLE_AVG_MS      300u
+#define GOTO_RESNAP_M           0.01f   // EKF lech trung binh camera (dung yen) hon muc nay -> dat lai theo camera
+#define GOTO_RESNAP_DEG         2.0f
+#define GOTO_MAX_TRIES          10      // so lan xoay/chay lai toi da
+#define GOTO_INIT_FRAMES        10      // so khung camera lay trung binh lam diem xuat phat
+#define GOTO_START_DELAY_MS     3000u
+#define GOTO_CAM_LOST_MS        1000u   // dang chay ma mat camera qua lau -> dung, cho camera
+#define GOTO_TIMEOUT_MS         60000u
+#define GOTO_GZ_MAX_DPS         250.0f  // |gyro z| lon hon -> coi la gai nhieu, giu mau truoc
+#define GOTO_LOG_EVERY_MS       100u    // dong log GT,... (~10 ms/dong tren UART)
+
+// ---------------------------------------------------------------------------
+// Bai chay thang 3 m bam duong bang EKF (ekf_run_test.c)
+// Dung lai: ENC_RUN_DUTY/_DUTY_START/_RAMP_MS/_START_DELAY_MS/_TIMEOUT_MS/
+// _LOG_EVERY_MS/_REST_MS/_COAST_MAX_MS, HH_KP/KI/KD/U_MAX/I_MAX (giu huong),
+// GOTO_INIT_FRAMES/_SETTLE_MS/_SETTLE_AVG_MS/_GZ_MAX_DPS va khoi EKF_*.
+// ---------------------------------------------------------------------------
+#define EKF_RUN_TEST_ENABLE     1
+
+#define ER_DIST_M               3.0f    // dung khi quang duong doc duong thang (EKF) dat muc nay
+// 1 = them vong keo ve duong thang (chay ngang mecanum) theo lech ngang EKF
+// 0 = chi giu huong bang goc EKF (de so sanh)
+#define ER_LAT_HOLD             1
+#define ER_KY                   1.0f    // duty / mm lech ngang
+#define ER_KIY                  0.5f    // duty / (mm*s)
+#define ER_S_MAX                60.0f   // gioi han hieu chinh ngang (duty)
+#define ER_SI_MAX               40.0f   // gioi han phan tich phan ngang (duty)
+
+#if (ENC_RUN_TEST_ENABLE + GOTO_TEST_ENABLE + EKF_RUN_TEST_ENABLE) > 1
+#error "Chi bat 1 bai test: ENC_RUN_TEST_ENABLE, GOTO_TEST_ENABLE hoac EKF_RUN_TEST_ENABLE"
+#endif

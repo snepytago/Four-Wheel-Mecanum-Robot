@@ -6,7 +6,7 @@
  *
  *   STM32 PC6 --UART--> esp32R (robot 29) --ESP-NOW--> board này --USB--> PC
  *
- * MAC board này: 94:E6:86:3A:C3:88 (phải khớp SERVER_MAC trong
+ * MAC board này: 1C:69:20:A4:D0:58 (phải khớp SERVER_MAC trong
  * esp32_vision/esp32_robot/esp32_robot.ino).
  * Chỉ nhận gói từ esp32R (14:33:5C:04:61:18), bỏ qua mọi nguồn khác.
  * Kênh WiFi phải giống esp32R và gateway: ESPNOW_CHANNEL = 1.

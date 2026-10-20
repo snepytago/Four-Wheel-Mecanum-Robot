@@ -13,6 +13,7 @@ static uint32_t ht[HIST_N];
 static uint16_t h_head, h_cnt;
 
 static uint32_t n_ok, n_rej, n_rej_run, n_reset;
+static float    reset_jump;     // do nhay vi tri lan nap lai gan nhat (m)
 
 static float wrap_pi(float a)
 {
@@ -64,6 +65,7 @@ void ekf_init(float x, float y, float th, uint32_t t_ms)
     h_head = 0; h_cnt = 0;
     hist_push(t_ms);
     n_ok = n_rej = n_rej_run = n_reset = 0;
+    reset_jump = 0.0f;
 }
 
 void ekf_set_pose(float x, float y, float th, uint32_t t_ms)
@@ -160,7 +162,24 @@ uint8_t ekf_update_cam(float xc, float yc, float thc, uint32_t t_meas_ms)
     if (d2 > EKF_GATE) {
         n_rej++;
         if (++n_rej_run >= EKF_REJECT_RESET) {
-            ekf_set_pose(xc, yc, thc, ht[(h_head + HIST_N - 1u) % HIST_N]);
+            // Sua 19/10/2026: nap lai CO BU TRE. Khung camera mo ta luc t_meas, nen
+            // cong do lech (z - trang thai luc t_meas) vao hien tai va ca lich su,
+            // khong gan thang z (cu ~200 ms) cho hien tai nhu ban 18/10.
+            reset_jump = sqrtf(r[0] * r[0] + r[1] * r[1]);
+            s[0] += r[0];
+            s[1] += r[1];
+            s[2]  = wrap_pi(s[2] + r[2]);
+            for (uint16_t i = 0; i < HIST_N; i++) {
+                hx[i] += r[0];
+                hy[i] += r[1];
+                hth[i] = wrap_pi(hth[i] + r[2]);
+            }
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 4; j++) { P[i][j] = 0.0f; P[j][i] = 0.0f; }
+            P[0][0] = rxy * rxy;
+            P[1][1] = rxy * rxy;
+            P[2][2] = rth * rth;
+            n_rej_run = 0;
             n_reset++;
             return 2;
         }
@@ -219,3 +238,4 @@ float ekf_sigma_xy(void)
 uint32_t ekf_n_ok(void)     { return n_ok; }
 uint32_t ekf_n_reject(void) { return n_rej; }
 uint32_t ekf_n_reset(void)  { return n_reset; }
+float    ekf_reset_jump(void) { return reset_jump; }

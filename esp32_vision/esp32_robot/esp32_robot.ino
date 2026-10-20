@@ -9,7 +9,7 @@
  *
  *   LÊN (UART -> USB Serial + ESP-NOW): đọc telemetry STM32 gửi ra PC6,
  *       in lên Serial Monitor của board này VÀ gửi không dây sang
- *       esp32Server (MAC 94:E6:86:3A:C3:88, cắm USB vào PC, chạy
+ *       esp32 laptop (MAC 1C:69:20:A4:D0:58, cắm USB vào PC, chạy
  *       esp32_vision/esp32_server_log). Dòng STM32 được đánh dấu "[STM]".
  *
  * Chuỗi đường truyền:
@@ -51,7 +51,8 @@
 
 // --- Gửi log STM32 không dây sang esp32Server ---
 #define FORWARD_TO_SERVER     1      // 0 = chỉ in qua USB như trước
-static uint8_t SERVER_MAC[6] = {0x94, 0xE6, 0x86, 0x3A, 0xC3, 0x88};
+// ESP32 laptop nhan log (truoc day la 94:E6:86:3A:C3:88)
+static uint8_t SERVER_MAC[6] = {0x1C, 0x69, 0x20, 0xA4, 0xD0, 0x58};
 
 // --- Hiển thị log của STM32 trên Serial Monitor ---
 // STM32 gửi ~100 dòng/giây (IMU 50Hz + POSE 50Hz + PLINK 5Hz). In hết sẽ

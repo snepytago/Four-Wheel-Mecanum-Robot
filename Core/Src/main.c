@@ -8,8 +8,10 @@
 #include "mpu6050.h"
 #include "pose_link.h"
 #include "robot_control.h"
-#include "enc_run_test.h"
-#include "goto_test.h"
+#include "ekf_run_test.h"
+#include "strafe_cal_test.h"
+#include "rot_cal_test.h"
+#include "zigzag_test.h"
 #include <math.h>
 
 int main(void)
@@ -44,12 +46,18 @@ int main(void)
     encoder_reset_all();
     odometry_reset();
 
-#if ENC_RUN_TEST_ENABLE
-    enc_run_test_run(imu_ready);   // khong bao gio return
+    // Bai test moi (chiem toan quyen) goi o day, bat/tat bang 1 co trong config.h
+#if EKF_RUN_TEST_ENABLE
+    ekf_run_test_run(imu_ready);
 #endif
-
-#if GOTO_TEST_ENABLE
-    goto_test_run(imu_ready);      // khong bao gio return
+#if STRAFE_CAL_TEST_ENABLE
+    strafe_cal_test_run(imu_ready);
+#endif
+#if ROT_CAL_TEST_ENABLE
+    rot_cal_test_run(imu_ready);
+#endif
+#if ZIGZAG_TEST_ENABLE
+    zigzag_test_run(imu_ready);
 #endif
 
     usart6_send_string("STM32:RUNNING\r\n");
